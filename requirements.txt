@@ -1,0 +1,24 @@
+streamlit
+python-dotenv
+
+# LangChain core + community
+langchain
+langchain-community
+langchain-text-splitters
+langchain-core
+
+# Groq LLM
+groq==0.11.0
+langchain-groq
+
+# Vector + embeddings + PDFs
+faiss-cpu
+chromadb
+sentence-transformers
+pypdf
+
+# Tokenization
+tiktoken
+
+# Testing
+pytest

@@ -1,0 +1,12 @@
+llm:
+  provider: groq
+  model_name: llama-3.1-8b-instant
+
+embeddings:
+  provider: huggingface
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+
+rag:
+  chunk_size: 900
+  chunk_overlap: 150
+  top_k: 4

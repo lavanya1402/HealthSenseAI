@@ -1,0 +1,28 @@
+# Virtual env
+.venv/
+env/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/
+
+# Environment & secrets
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# FAISS index / vector stores
+data/processed/*
+!data/processed/.gitkeep
