@@ -4,7 +4,7 @@ Central configuration for HealthSenseAI (Groq version).
 
 - Loads environment variables
 - Exposes Settings dataclass
-- Creates a LangChain-compatible LLM (ChatGroq)
+- Creates a Groq client
 """
 
 import os
@@ -12,8 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
-from langchain_core.language_models import BaseChatModel
+from groq import Groq  # <-- official Groq client
 
 load_dotenv()
 
@@ -67,16 +66,13 @@ class Settings:
         )
 
 
-def get_llm(settings: Settings) -> BaseChatModel:
+def get_llm(settings: Settings) -> Groq:
     """
-    Return a LangChain-compatible chat model.
-    (Currently: Groq ChatGroq)
+    Return a Groq client instance.
+    We keep the function name `get_llm` so app.py doesn't need changes.
     """
-    if settings.llm_provider == "groq":
-        return ChatGroq(
-            groq_api_key=settings.groq_api_key,
-            model_name=settings.llm_model_name,
-            temperature=0.2,
-        )
+    if settings.llm_provider != "groq":
+        raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")
 
-    raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")
+    client = Groq(api_key=settings.groq_api_key)
+    return client

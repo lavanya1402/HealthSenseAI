@@ -1,6 +1,6 @@
 """
 rag_pipeline.py
-RAG pipeline for HealthSenseAI (Groq + LangChain).
+RAG pipeline for HealthSenseAI (Groq client).
 
 Steps:
 1. Load health guideline PDFs from data/raw
@@ -10,38 +10,37 @@ Steps:
 5. For each query:
    - Retrieve top-k chunks
    - Build prompt with context + user query
-   - Ask the LLM (Groq via LangChain)
+   - Ask the LLM (Groq chat.completions)
    - Apply guardrails
 """
 
 from pathlib import Path
 from typing import List
 
+from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage, HumanMessage
 
-from .config import Settings
-from .guards import apply_guardrails
-from .utils import build_system_prompt, LanguageCode
+from config import Settings
+from guards import apply_guardrails
+from utils import build_system_prompt, LanguageCode
 
 
 class HealthSenseRAG:
     def __init__(
         self,
         settings: Settings,
-        llm: BaseChatModel,
+        llm: Groq,
         language: LanguageCode = "en",
         top_k: int = 4,
         chunk_size: int = 900,
         chunk_overlap: int = 150,
     ) -> None:
         self.settings = settings
-        self.llm = llm
+        self.client = llm          # Groq client
         self.language = language
         self.top_k = top_k
         self.chunk_size = chunk_size
@@ -128,13 +127,16 @@ class HealthSenseRAG:
             "incomplete. Do NOT invent specific statistics or clinical protocols."
         )
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ]
+        completion = self.client.chat.completions.create(
+            model=self.settings.llm_model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+        )
 
-        response = self.llm.invoke(messages)
-        answer_text = response.content.strip()
+        answer_text = completion.choices[0].message.content.strip()
 
         safe_answer = apply_guardrails(user_query, answer_text)
         return safe_answer
