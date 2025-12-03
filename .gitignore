@@ -1,18 +1,19 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.DS_Store
-
-# Venv
-.venv/
-
-# Streamlit cache
-.streamlit/
-
-# Environment
+# ENV & Keys
 .env
 
-# FAISS index files
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Streamlit
+.streamlit/
+
+# Data folders
+data/raw/*
 data/processed/faiss_index/*
+src/data/raw/*
+src/data/processed/*
+
+# PDFs
+*.pdf
