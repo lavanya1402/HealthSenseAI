@@ -1,6 +1,6 @@
 """
 config.py
-Central configuration for HealthSenseAI (Groq + RAG)
+Central configuration for HealthSenseAI (Groq + RAG).
 """
 
 import os
@@ -10,13 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from groq import Groq
 
+# Load environment variables from .env if present
 load_dotenv()
-
-# Optional: Streamlit is only available on Streamlit Cloud / when running the app
-try:
-    import streamlit as st  # type: ignore
-except Exception:
-    st = None
 
 # Detect project root: .../HealthSenseAI
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,20 +37,11 @@ class Settings:
 
         model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-        # 1️⃣ Try normal environment / .env (local dev)
         groq_api_key = os.getenv("GROQ_API_KEY")
-
-        # 2️⃣ Fallback to Streamlit Cloud secrets
-        if not groq_api_key and st is not None:
-            groq_api_key = st.secrets.get("GROQ_API_KEY")
-
         if not groq_api_key:
-            raise ValueError(
-                "GROQ_API_KEY is missing. Set it in a local .env file "
-                "or in Streamlit Cloud Secrets."
-            )
+            raise ValueError("GROQ_API_KEY is missing in environment / .env file")
 
-        # These now always point to HealthSenseAI/data/... by default
+        # Default folders: HealthSenseAI/data/raw and HealthSenseAI/data/processed/faiss_index
         data_raw_dir = Path(
             os.getenv("DATA_RAW_DIR", str(PROJECT_ROOT / "data" / "raw"))
         )
