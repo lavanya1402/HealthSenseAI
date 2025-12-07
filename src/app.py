@@ -10,7 +10,6 @@ import streamlit as st
 
 from config import Settings, get_llm
 from rag_pipeline import HealthSenseRAG
-from utils import language_label, LanguageCode
 
 
 def init_session_state() -> None:
@@ -19,7 +18,7 @@ def init_session_state() -> None:
 
 
 def main() -> None:
-    # Page configuration
+    # -------------------- Page configuration --------------------
     st.set_page_config(
         page_title="HealthSenseAI – Public Health Awareness Assistant",
         page_icon="🩺",
@@ -28,7 +27,7 @@ def main() -> None:
 
     init_session_state()
 
-    # -------------------- Header --------------------
+    # -------------------- Header styling --------------------
     st.markdown(
         """
         <style>
@@ -63,12 +62,9 @@ def main() -> None:
     with st.sidebar:
         st.header("Settings")
 
-        # Language selection
-        language: LanguageCode = st.selectbox(
-            "Response language",
-            options=["en", "hi", "mr"],
-            format_func=language_label,
-            index=0,
+        st.write(
+            "You can type your question in any language. "
+            "The assistant will reply in the same language."
         )
 
         st.markdown("---")
@@ -113,7 +109,9 @@ def main() -> None:
 
     # -------------------- RAG Engine --------------------
     llm = get_llm(settings)
-    rag_engine = HealthSenseRAG(settings=settings, llm=llm, language=language)
+    # language argument removed – behaviour handled by system prompt (same language as user)
+    rag_engine = HealthSenseRAG(settings=settings, llm=llm)
+
     rag_engine.build_or_load_index()
 
     # -------------------- Main Chat Area --------------------
@@ -122,10 +120,21 @@ def main() -> None:
     with st.expander("Examples", expanded=False):
         st.markdown(
             """
+            **English**
             - What are early warning signs of diabetes according to public health guidelines?  
             - How can adults reduce their risk of hypertension through lifestyle changes?  
-            - What prevention measures are recommended for dengue in high-risk regions?  
-            - What screening recommendations exist for women with gestational diabetes?  
+
+            **Hindi**
+            - शुगर के शुरुआती लक्षण क्या हो सकते हैं?  
+            - डेंगू से बचाव के लिए कौन-कौन से उपाय सुझाए जाते हैं?  
+
+            **Marathi**
+            - हाय ब्लड प्रेशर कमी करण्यासाठी रोजच्या जीवनशैलीत कोणते बदल करायला हवेत?  
+            - डेंग्यूची प्रतिबंधात्मक उपाययोजना कोणत्या आहेत?  
+
+            **Gujarati**
+            - ડાયાબિટીસના પ્રારંભિક લક્ષણો શું હોઈ શકે?  
+            - ઊંચા બ્લડ પ્રેશરનું જોખમ ઓછું કરવા માટે જીવનશૈલીમાં શું ફેરફાર કરવા જોઈએ?  
             """
         )
 
@@ -173,5 +182,5 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

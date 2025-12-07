@@ -28,13 +28,10 @@ from utils import build_system_prompt, LanguageCode
 
 class HealthSenseRAG:
     """
-    HealthSenseRAG
-    --------------
     A focused RAG engine that:
 
     - Attempts to build / load a FAISS vector index from guideline PDFs.
-    - If that fails due to non-extractable text, continues in "no-RAG" mode,
-      answering from general public-health knowledge only.
+    - If that fails due to non-extractable text, continues in "no-RAG" mode.
     """
 
     def __init__(
@@ -47,33 +44,22 @@ class HealthSenseRAG:
         chunk_overlap: int = 150,
     ) -> None:
         self.settings = settings
-        self.client = llm  # Groq client instance
+        self.client = llm
         self.language = language
         self.top_k = top_k
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-        # Embedding model (HuggingFace sentence-transformer)
         self._embedding = HuggingFaceEmbeddings(
             model_name=self.settings.embedding_model_name
         )
 
-        # Vector store will be loaded / built lazily
         self._vectorstore: FAISS | None = None
-
-        # Flag: do we have a usable index?
         self.rag_enabled: bool = False
 
-    # ------------------------------------------------------------------
-    # Internal helpers: loading + indexing
-    # ------------------------------------------------------------------
+    # ----------------- Loading + Indexing -----------------
     def _load_pdfs(self) -> List[Document]:
-        """
-        Load all PDFs from the configured raw data directory and return
-        a list of LangChain Document objects.
-        """
         data_dir: Path = self.settings.data_raw_dir
-
         print(f"[HealthSenseRAG] Looking for PDFs in: {data_dir.resolve()}")
 
         pdf_files = list(data_dir.glob("*.pdf"))
@@ -94,9 +80,6 @@ class HealthSenseRAG:
         return docs
 
     def _split_documents(self, docs: List[Document]) -> List[Document]:
-        """
-        Split documents into overlapping chunks suitable for retrieval.
-        """
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
@@ -106,17 +89,10 @@ class HealthSenseRAG:
         return chunked_docs
 
     def build_or_load_index(self) -> None:
-        """
-        Load an existing FAISS index from disk if available; otherwise
-        build a new one from the guideline PDFs and persist it.
-
-        If no readable text can be extracted from PDFs, the method will
-        NOT raise and will instead disable RAG (fallback to non-RAG mode).
-        """
         index_path: Path = self.settings.index_dir
         faiss_file = index_path / "index.faiss"
 
-        # 1) If index already exists, load it
+        # 1) Load existing index
         if faiss_file.exists():
             print(f"[HealthSenseRAG] Loading FAISS index from: {index_path.resolve()}")
             self._vectorstore = FAISS.load_local(
@@ -127,19 +103,17 @@ class HealthSenseRAG:
             self.rag_enabled = True
             return
 
-        # 2) Otherwise build a fresh index
+        # 2) Otherwise build new index
         print("[HealthSenseRAG] Building new FAISS index from PDFs...")
 
         try:
             docs = self._load_pdfs()
         except FileNotFoundError as e:
-            # No PDFs at all -> run in no-RAG mode
             print(f"[HealthSenseRAG] No PDFs found: {e}")
             self._vectorstore = None
             self.rag_enabled = False
             return
 
-        # Filter out pages with empty / whitespace-only content
         filtered_docs = [
             d for d in docs if d.page_content and d.page_content.strip()
         ]
@@ -149,7 +123,6 @@ class HealthSenseRAG:
         )
 
         if not filtered_docs:
-            # Image-only PDFs or unreadable text: fallback to non-RAG mode
             print(
                 "[HealthSenseRAG] PDFs found but no readable text extracted. "
                 "Proceeding in non-RAG mode (no FAISS index)."
@@ -168,7 +141,6 @@ class HealthSenseRAG:
             self.rag_enabled = False
             return
 
-        # Build FAISS index
         vectorstore = FAISS.from_documents(chunked_docs, self._embedding)
         index_path.mkdir(parents=True, exist_ok=True)
         vectorstore.save_local(str(index_path))
@@ -177,15 +149,8 @@ class HealthSenseRAG:
         self._vectorstore = vectorstore
         self.rag_enabled = True
 
-    # ------------------------------------------------------------------
-    # Retrieval
-    # ------------------------------------------------------------------
+    # ----------------- Retrieval -----------------
     def retrieve_context(self, query: str) -> List[Document]:
-        """
-        Retrieve top-k most similar chunks for the given query from FAISS.
-
-        If RAG is disabled (no usable index), returns an empty list.
-        """
         if not self.rag_enabled:
             print("[HealthSenseRAG] RAG disabled – skipping retrieval.")
             return []
@@ -194,7 +159,6 @@ class HealthSenseRAG:
             self.build_or_load_index()
 
         if self._vectorstore is None:
-            # Still not available after build attempt
             print("[HealthSenseRAG] Vectorstore unavailable – skipping retrieval.")
             return []
 
@@ -204,15 +168,10 @@ class HealthSenseRAG:
 
     @staticmethod
     def _format_context(docs: List[Document]) -> str:
-        """
-        Cleanly concatenate retrieved chunks into a single context string.
-        """
         context_chunks = [d.page_content.strip() for d in docs if d.page_content]
         return "\n\n---\n\n".join(context_chunks)
 
-    # ------------------------------------------------------------------
-    # LLM answering
-    # ------------------------------------------------------------------
+    # ----------------- Answering -----------------
     def answer_query(self, user_query: str) -> str:
         """
         Full answering pipeline.
@@ -221,12 +180,30 @@ class HealthSenseRAG:
             -> Retrieve context + answer using guidelines.
         - If RAG is disabled:
             -> Answer from general public-health knowledge only.
+
+        Language behaviour:
+        - Controlled by build_system_prompt(): reply in the SAME language
+          as the user's question, with an extra safeguard for pure English.
         """
+        # 1) Retrieve context (if any)
         docs = self.retrieve_context(user_query)
         context_text = self._format_context(docs) if docs else ""
 
+        # 2) System prompt (public-health rules + language rules)
         system_prompt = build_system_prompt(self.language)
 
+        # <<< NEW ENGLISH GUARD >>>
+        # If the user's question is only ASCII (likely English),
+        # force the model to reply strictly in English.
+        if user_query.isascii():
+            system_prompt += (
+                "\n\nIMPORTANT: The user's question is written using only English "
+                "characters. You MUST answer ONLY in clear, simple English. "
+                "Do NOT reply in Hindi, Marathi, or any other language, and do NOT "
+                "transliterate English sentences into another script."
+            )
+
+        # 3) Build the combined user message
         if docs:
             prefix = (
                 "Here is context extracted from official public-health guidelines:\n\n"
@@ -250,6 +227,7 @@ class HealthSenseRAG:
                 "must consult a qualified professional for any personal decision."
             )
 
+        # 4) Call Groq LLM
         completion = self.client.chat.completions.create(
             model=self.settings.llm_model_name,
             messages=[
@@ -261,5 +239,6 @@ class HealthSenseRAG:
 
         raw_answer = completion.choices[0].message.content.strip()
 
+        # 5) Apply guardrails
         safe_answer = apply_guardrails(user_query, raw_answer)
         return safe_answer
