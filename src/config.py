@@ -1,6 +1,6 @@
 """
 config.py
-Central configuration for HealthSenseAI (Groq + RAG).
+Configuration & LLM client setup for HealthSenseAI.
 """
 
 import os
@@ -13,7 +13,7 @@ from groq import Groq
 # Load environment variables from .env if present
 load_dotenv()
 
-# Detect project root: .../HealthSenseAI
+# Project root: .../HealthSenseAI
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -30,8 +30,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         app_env = os.getenv("APP_ENV", "dev")
-
         provider = os.getenv("LLM_PROVIDER", "groq").lower()
+
         if provider != "groq":
             raise ValueError("Only 'groq' provider is supported at the moment.")
 

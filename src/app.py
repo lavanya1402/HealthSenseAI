@@ -61,7 +61,6 @@ def main() -> None:
     # -------------------- Sidebar --------------------
     with st.sidebar:
         st.header("Settings")
-
         st.write(
             "You can type your question in any language. "
             "The assistant will reply in the same language."
@@ -71,7 +70,7 @@ def main() -> None:
         st.subheader("Knowledge Base")
 
         uploaded_pdfs = st.file_uploader(
-            "Upload health guideline PDFs (WHO / CDC / MoHFW):",
+            "Upload health guideline PDFs (WHO / MoHFW / national):",
             type=["pdf"],
             accept_multiple_files=True,
             help="Files will be stored in the project’s data/raw directory.",
@@ -87,15 +86,17 @@ def main() -> None:
 
             st.success(
                 f"Uploaded {len(saved_files)} PDF file(s). "
-                "Re-run the app to ensure they are fully indexed."
+                "Restart the app so that they are included in the index."
             )
 
         pdf_count = len(list(settings.data_raw_dir.glob("*.pdf")))
-        st.caption(f"Indexed guideline files detected in `data/raw/`: **{pdf_count}**")
+        st.caption(
+            f"Guideline PDF files currently detected in data/raw/: **{pdf_count}**"
+        )
 
         st.markdown(
-            "- Place WHO / CDC / MoHFW guideline PDFs in `data/raw/`.\n"
-            "- The app automatically builds or loads a FAISS index from these files."
+            "- Place WHO / national guideline PDFs in `data/raw/`.\n"
+            "- The app automatically (re)builds a FAISS index from these files at startup."
         )
 
         st.markdown("---")
@@ -109,9 +110,9 @@ def main() -> None:
 
     # -------------------- RAG Engine --------------------
     llm = get_llm(settings)
-    # language argument removed – behaviour handled by system prompt (same language as user)
     rag_engine = HealthSenseRAG(settings=settings, llm=llm)
 
+    # Build index ONCE at app start
     rag_engine.build_or_load_index()
 
     # -------------------- Main Chat Area --------------------
@@ -120,22 +121,22 @@ def main() -> None:
     with st.expander("Examples", expanded=False):
         st.markdown(
             """
-            **English**
-            - What are early warning signs of diabetes according to public health guidelines?  
-            - How can adults reduce their risk of hypertension through lifestyle changes?  
+**English**
+- What are early warning signs of diabetes according to these guidelines?
+- How can adults reduce their risk of hypertension through lifestyle changes?
 
-            **Hindi**
-            - शुगर के शुरुआती लक्षण क्या हो सकते हैं?  
-            - डेंगू से बचाव के लिए कौन-कौन से उपाय सुझाए जाते हैं?  
+**Hindi**
+- शुगर के शुरुआती लक्षण क्या हो सकते हैं?
+- उच्च रक्तचाप का जोखिम कम करने के लिए कौन-से उपाय बताए गए हैं?
 
-            **Marathi**
-            - हाय ब्लड प्रेशर कमी करण्यासाठी रोजच्या जीवनशैलीत कोणते बदल करायला हवेत?  
-            - डेंग्यूची प्रतिबंधात्मक उपाययोजना कोणत्या आहेत?  
+**Marathi**
+- मधुमेहाची प्रारंभिक लक्षणे कोणती आहेत?
+- हाय ब्लड प्रेशर कमी करण्यासाठी जीवनशैलीत कोणते बदल करायला हवेत?
 
-            **Gujarati**
-            - ડાયાબિટીસના પ્રારંભિક લક્ષણો શું હોઈ શકે?  
-            - ઊંચા બ્લડ પ્રેશરનું જોખમ ઓછું કરવા માટે જીવનશૈલીમાં શું ફેરફાર કરવા જોઈએ?  
-            """
+**Gujarati**
+- ડાયાબિટીસના પ્રારંભિક લક્ષણો શું હોઈ શકે?
+- ઊંચા બ્લડ પ્રેશરનું જોખમ ઓછું કરવા માટે જીવનશૈલીમાં શું ફેરફાર કરવાની સલાહ છે?
+"""
         )
 
     # Display conversation history
@@ -143,7 +144,7 @@ def main() -> None:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input (appears at the bottom of the page)
+    # Chat input
     user_input = st.chat_input(
         "Type a question about symptoms, prevention, lifestyle, or screenings..."
     )
@@ -159,21 +160,13 @@ def main() -> None:
             with st.spinner("Consulting public health guidelines..."):
                 try:
                     response = rag_engine.answer_query(user_input)
-                except FileNotFoundError as e:
-                    st.error(
-                        "No guideline PDFs were found in `data/raw/`.\n\n"
-                        "Please upload WHO / CDC / MoHFW guideline PDFs and run the app again.\n\n"
-                        f"Details: {e}"
-                    )
-                    return
                 except Exception as e:
                     st.error(f"An error occurred while generating the answer: {e}")
                     return
 
                 st.markdown(response)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": response}
-                )
+
+        st.session_state.messages.append({"role": "assistant", "content": response})
 
     st.markdown(
         "---\n"
@@ -182,5 +175,5 @@ def main() -> None:
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

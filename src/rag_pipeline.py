@@ -2,11 +2,18 @@
 rag_pipeline.py
 RAG pipeline for HealthSenseAI (Groq + LangChain + FAISS).
 
-If guideline PDFs contain readable text:
-    -> Build a FAISS index and use RAG.
-If PDFs are image-only / non-extractable:
-    -> Skip FAISS and fall back to general public-health answers
-       (still with strong guardrails).
+Behaviour (STRICT RAG, zero hallucination):
+
+- If a FAISS index exists AND guideline chunks are retrieved:
+      → Answer ONLY from those guideline excerpts.
+- If no relevant excerpts are retrieved:
+      → Reply that the guideline does not provide information.
+- If FAISS index cannot be built / loaded:
+      → Reply that the guideline index is unavailable.
+
+All answers:
+- Are educational only (no diagnosis, no prescriptions).
+- Include a "Sources (public health guidelines)" section when RAG is used.
 """
 
 from __future__ import annotations
@@ -28,10 +35,11 @@ from utils import build_system_prompt, LanguageCode
 
 class HealthSenseRAG:
     """
-    A focused RAG engine that:
+    HealthSenseAI RAG engine.
 
     - Attempts to build / load a FAISS vector index from guideline PDFs.
-    - If that fails due to non-extractable text, continues in "no-RAG" mode.
+    - If text cannot be extracted (e.g., image-only PDFs), runs in
+      "index unavailable" mode and clearly reports that to the user.
     """
 
     def __init__(
@@ -57,8 +65,15 @@ class HealthSenseRAG:
         self._vectorstore: FAISS | None = None
         self.rag_enabled: bool = False
 
-    # ----------------- Loading + Indexing -----------------
+    # ------------------------------------------------------------------
+    # Loading + Indexing
+    # ------------------------------------------------------------------
     def _load_pdfs(self) -> List[Document]:
+        """
+        Load PDFs from data_raw_dir and attach metadata:
+        - source: filename (not full path, nicer in UI)
+        - page:   1-based page index
+        """
         data_dir: Path = self.settings.data_raw_dir
         print(f"[HealthSenseRAG] Looking for PDFs in: {data_dir.resolve()}")
 
@@ -74,9 +89,18 @@ class HealthSenseRAG:
             print(f"[HealthSenseRAG] Loading PDF: {pdf_path.name}")
             loader = PyPDFLoader(str(pdf_path))
             pdf_docs = loader.load()
-            docs.extend(pdf_docs)
 
-        print(f"[HealthSenseRAG] Loaded {len(docs)} document pages from PDFs.")
+            for i, d in enumerate(pdf_docs):
+                meta = dict(d.metadata or {})
+                # Normalise metadata for cleaner citations
+                meta["source"] = pdf_path.name
+                meta["page"] = i + 1
+                d.metadata = meta
+                docs.append(d)
+
+        print(
+            f"[HealthSenseRAG] Loaded {len(docs)} document pages from PDFs with metadata."
+        )
         return docs
 
     def _split_documents(self, docs: List[Document]) -> List[Document]:
@@ -89,6 +113,12 @@ class HealthSenseRAG:
         return chunked_docs
 
     def build_or_load_index(self) -> None:
+        """
+        Build a FAISS index from guideline PDFs, or load an existing one.
+
+        If anything goes wrong (no PDFs, no text, no chunks), RAG is disabled
+        and the app will respond with an "index unavailable" message.
+        """
         index_path: Path = self.settings.index_dir
         faiss_file = index_path / "index.faiss"
 
@@ -125,7 +155,7 @@ class HealthSenseRAG:
         if not filtered_docs:
             print(
                 "[HealthSenseRAG] PDFs found but no readable text extracted. "
-                "Proceeding in non-RAG mode (no FAISS index)."
+                "Index cannot be built."
             )
             self._vectorstore = None
             self.rag_enabled = False
@@ -135,7 +165,7 @@ class HealthSenseRAG:
         if not chunked_docs:
             print(
                 "[HealthSenseRAG] Splitting produced zero chunks. "
-                "Proceeding in non-RAG mode."
+                "Index cannot be built."
             )
             self._vectorstore = None
             self.rag_enabled = False
@@ -149,8 +179,15 @@ class HealthSenseRAG:
         self._vectorstore = vectorstore
         self.rag_enabled = True
 
-    # ----------------- Retrieval -----------------
+    # ------------------------------------------------------------------
+    # Retrieval
+    # ------------------------------------------------------------------
     def retrieve_context(self, query: str) -> List[Document]:
+        """
+        Retrieve top-k similar chunks from FAISS.
+
+        If RAG is disabled or index cannot be loaded, returns an empty list.
+        """
         if not self.rag_enabled:
             print("[HealthSenseRAG] RAG disabled – skipping retrieval.")
             return []
@@ -163,82 +200,147 @@ class HealthSenseRAG:
             return []
 
         docs = self._vectorstore.similarity_search(query, k=self.top_k)
-        print(f"[HealthSenseRAG] Retrieved {len(docs)} chunks for query.")
+
+        for d in docs:
+            print(
+                f"[RAG] Retrieved from source={d.metadata.get('source')} "
+                f"page={d.metadata.get('page')}"
+            )
+
         return docs
 
-    @staticmethod
-    def _format_context(docs: List[Document]) -> str:
-        context_chunks = [d.page_content.strip() for d in docs if d.page_content]
-        return "\n\n---\n\n".join(context_chunks)
-
-    # ----------------- Answering -----------------
+    # ------------------------------------------------------------------
+    # Answering (STRICT RAG)
+    # ------------------------------------------------------------------
     def answer_query(self, user_query: str) -> str:
         """
-        Full answering pipeline.
+        STRICT RAG ANSWERING (zero hallucination):
 
-        - If RAG is enabled and index exists:
-            -> Retrieve context + answer using guidelines.
-        - If RAG is disabled:
-            -> Answer from general public-health knowledge only.
+        - If RAG is enabled and guideline chunks exist:
+              → Answer ONLY from those guideline excerpts.
+        - If no matching guideline text exists:
+              → Clearly say that the guideline does not provide
+                information on this topic.
+        - If RAG is disabled even after trying to build:
+              → Clearly say that the guideline index is unavailable.
 
-        Language behaviour:
-        - Controlled by build_system_prompt(): reply in the SAME language
-          as the user's question, with an extra safeguard for pure English.
+        All answers:
+        - Are educational only.
+        - Include a sources section when RAG is used.
         """
-        # 1) Retrieve context (if any)
+
+        # 0) If FAISS index not available, try (again) to build it.
+        if not self.rag_enabled or self._vectorstore is None:
+            print("[HealthSenseRAG] RAG not ready – attempting to (re)build index...")
+            self.build_or_load_index()
+
+        # Still not available → give clean message
+        if not self.rag_enabled or self._vectorstore is None:
+            return (
+                "⚠️ **Guideline index unavailable**\n\n"
+                "HealthSenseAI could not access a WHO/CDC/MoHFW guideline index. "
+                "Please ensure that readable (text-based) PDFs are available in "
+                "`data/raw/` and that at least one of them contains selectable text "
+                "rather than only scanned images."
+            )
+
+        # 1) Retrieve guideline chunks
         docs = self.retrieve_context(user_query)
-        context_text = self._format_context(docs) if docs else ""
 
-        # 2) System prompt (public-health rules + language rules)
-        system_prompt = build_system_prompt(self.language)
-
-        # <<< NEW ENGLISH GUARD >>>
-        # If the user's question is only ASCII (likely English),
-        # force the model to reply strictly in English.
-        if user_query.isascii():
-            system_prompt += (
-                "\n\nIMPORTANT: The user's question is written using only English "
-                "characters. You MUST answer ONLY in clear, simple English. "
-                "Do NOT reply in Hindi, Marathi, or any other language, and do NOT "
-                "transliterate English sentences into another script."
+        # No matching guideline content
+        if not docs:
+            return (
+                "⚠️ **Guideline Not Found**\n\n"
+                "The uploaded guidelines do **not contain information clearly related** "
+                "to your question. Please upload additional WHO/CDC/MoHFW PDFs or "
+                "consult a qualified healthcare professional for advice."
             )
 
-        # 3) Build the combined user message
-        if docs:
-            prefix = (
-                "Here is context extracted from official public-health guidelines:\n\n"
-                f"{context_text}\n\n"
-                "User question:\n"
-                f"{user_query}\n\n"
-                "Use the guideline context when it is relevant. If the context is "
-                "insufficient, you may use general public-health knowledge, but clearly "
-                "state that the information may be incomplete.\n"
-                "Do NOT provide diagnosis. Do NOT prescribe medications, dosages, or "
-                "treatment plans. Always encourage users to consult qualified healthcare "
-                "professionals for personal medical decisions."
-            )
-        else:
-            prefix = (
-                "No structured guideline snippets are available. "
-                "Answer based on general, widely accepted public-health knowledge only.\n\n"
-                "User question:\n"
-                f"{user_query}\n\n"
-                "Be especially clear that this is not medical advice and that the user "
-                "must consult a qualified professional for any personal decision."
+        # 2) Prepare contextual excerpts for the LLM (not shown directly to the user)
+        context_for_llm: List[str] = []
+        for i, d in enumerate(docs, start=1):
+            src = d.metadata.get("source", "Guideline")
+            page = d.metadata.get("page", "Unknown")
+            context_for_llm.append(
+                f"[Excerpt {i} | Source: {src} | Page: {page}]\n{d.page_content.strip()}"
             )
 
-        # 4) Call Groq LLM
+        formatted_context = "\n\n".join(context_for_llm)
+
+        # 3) Base system prompt (language + safety framing)
+        base_system_prompt = build_system_prompt(self.language)
+
+        # 4) Strict RAG rules appended to system prompt
+        system_prompt = (
+            base_system_prompt
+            + "\n\n"
+            "You must obey the following STRICT RULES:\n"
+            "- You MUST answer ONLY using the information in the provided guideline excerpts.\n"
+            "- You are **not allowed** to use outside medical knowledge or assumptions.\n"
+            "- If the excerpts do NOT contain enough information to answer, reply exactly:\n"
+            "  'The guideline does not provide information on this topic.'\n"
+            "- Do NOT invent or guess any facts.\n"
+            "- Do NOT provide diagnosis.\n"
+            "- Do NOT prescribe medicines, doses, or treatment plans.\n"
+            "- Keep the tone educational and supportive.\n"
+            "- Keep the answer concise: at most ~8 short bullet points or 200–250 words.\n"
+            "- Do NOT repeat the same sentence or phrase multiple times.\n"
+        )
+
+        # 5) User message with context + question
+        user_prompt = (
+            f"### Guideline Excerpts\n{formatted_context}\n\n"
+            f"### User Question\n{user_query}\n\n"
+            "### Task\n"
+            "Using ONLY the information in the excerpts above, give a short, clear answer "
+            "in the same language as the user. If the excerpts do not contain enough "
+            "information to safely answer, reply exactly:\n"
+            "'The guideline does not provide information on this topic.'"
+        )
+
+        # 6) LLM call – temperature fixed to 0 for zero drift
         completion = self.client.chat.completions.create(
             model=self.settings.llm_model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prefix},
+                {"role": "user", "content": user_prompt},
             ],
-            temperature=0.2,
+            temperature=0.0,
+            # You can adjust if needed
+            max_tokens=400,
         )
 
         raw_answer = completion.choices[0].message.content.strip()
 
-        # 5) Apply guardrails
+        # 7) Apply safety guardrails (medication / diagnosis filters etc.)
         safe_answer = apply_guardrails(user_query, raw_answer)
+
+        # 8) Generate citation section
+        seen = set()
+        lines: List[str] = []
+
+        for d in docs:
+            src = d.metadata.get("source", None)
+            page = d.metadata.get("page", None)
+            if not src:
+                continue
+
+            key = (src, page)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            if page is not None:
+                lines.append(f"- **{src}** — page {page}")
+            else:
+                lines.append(f"- **{src}**")
+
+        if lines:
+            citation_block = (
+                "\n\n---\n"
+                "**Sources (public health guidelines)**\n"
+                + "\n".join(lines)
+            )
+            safe_answer += citation_block
+
         return safe_answer
