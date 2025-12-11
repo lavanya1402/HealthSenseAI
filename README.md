@@ -1,101 +1,175 @@
-# 🌿 HealthSenseAI – Public Health Awareness Assistant
+<!-- ------------------------------------------------------------ -->
+<!--                         PROJECT BANNER                        -->
+<!-- ------------------------------------------------------------ -->
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)]()
-[![Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-FF4B4B.svg)]()
-[![RAG](https://img.shields.io/badge/Architecture-RAG%20%2B%20FAISS-green.svg)]()
-[![Groq](https://img.shields.io/badge/Powered%20by-Groq-orange.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/lavanya1402/HealthSenseAI/main/assets/banner.svg" width="95%" />
+</p>
 
-### 🩺 AI-Powered, Multilingual, Guideline-Based Health Education
+<h1 align="center">🌱 HealthSenseAI – Public Health Awareness Assistant</h1>
 
-**Live Demo:** 👉 https://aihealthsense.streamlit.app/
+<p align="center">
+<a href="https://aihealthsense.streamlit.app/"><img src="https://img.shields.io/badge/Live_Demo-Streamlit_App-FF4B4B?logo=streamlit&logoColor=white"></a>
+<img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python">
+<img src="https://img.shields.io/badge/Framework-Streamlit-FF4B4B?logo=streamlit">
+<img src="https://img.shields.io/badge/RAG-FAISS-green">
+<img src="https://img.shields.io/badge/LLM-Groq-orange?logo=groq">
+<img src="https://img.shields.io/badge/License-MIT-yellow">
+</p>
 
-⭐ Overview
+<p align="center">
+  <a href="https://youtu.be/your_video_link_here">
+    <img src="https://img.shields.io/badge/🎥_Video_Demo-Watch_Now-red?logo=youtube">
+  </a>
+</p>
 
-HealthSenseAI is a multilingual AI assistant designed to improve public health awareness using official health guidelines like:
+---
 
-✅ Healthy Diet guidelines (India)
+## ⭐ Overview
 
-✅ Hypertension screening & management guidelines
+**HealthSenseAI** is a multilingual health-education assistant designed for **India’s rural & semi-urban population**, powered by three core health documents:
 
-✅ WHO recommendations on diabetes care for women
+- 🇮🇳 **Healthy Diet Guidelines**  
+- 🩺 **Hypertension Screening Guidelines**  
+- 👩‍🍼 **WHO Diabetes-Care Recommendations (Women)**  
 
-It uses Retrieval-Augmented Generation (RAG) with FAISS, Groq, and Streamlit to answer health questions safely, reliably, and in local languages.
+Built using:
 
-⚠️ Important:
-HealthSenseAI is an educational tool only.
-It does not provide diagnosis, prescriptions, or treatment plans.
+- ⚡ **Groq LLMs** (Llama / Mixtral)  
+- 📚 **LangChain**  
+- 🔍 **FAISS Vector Search**  
+- 🖥️ **Streamlit UI**
 
-🧠 Core Features
-🔍 1. Strict RAG (Zero-Hallucination Mode)
+It provides **safe, guideline-based** answers in **7 Indian languages**.
 
-Answers are generated only from the uploaded guideline PDFs.
+---
 
-If no relevant guideline text is found, the assistant clearly says:
+## ❤️ Why This Matters
 
-“The guideline does not provide information on this topic.”
+India has:
 
-If the FAISS index is unavailable or PDFs are unreadable, it reports:
+- 65% population living in rural / semi-urban regions  
+- Limited access to reliable health information  
+- High rates of lifestyle diseases (BP, diabetes)  
+- Huge linguistic diversity  
 
-“Guideline index unavailable.”
+**HealthSenseAI solves this by offering:**
 
-🌍 2. Multilingual Support (7 Languages)
+- Accurate ● multilingual ● guideline-verified health information  
+- A tool ASHA workers can use for **mass family health education**  
+- Zero-hallucination RAG for **trustworthy health awareness**
 
-The assistant responds automatically in the same language as the user’s question:
+A single ASHA worker using this app can educate **hundreds of families**.
 
-English (en)
+---
 
-Hindi (hi)
+## ⚠️ Safety Disclaimer
 
-Marathi (mr)
+HealthSenseAI is for **public health awareness ONLY**.
 
-Gujarati (gu)
+- ❌ Does NOT diagnose  
+- ❌ Does NOT prescribe medicines  
+- ❌ Cannot replace a medical professional  
+- ⚠️ If symptoms are serious → consult a doctor immediately  
 
-Tamil (ta)
+---
 
-Telugu (te)
+## 🧠 Core Features
 
-Bengali (bn)
+### 🔍 Strict RAG Mode (Zero Hallucination)
+- Answers ONLY from official guidelines  
+- If a topic isn't covered → safe refusal  
 
-Perfect for rural & semi-urban populations across India.
+### 🌐 Multilingual (7 Languages)
+- English  
+- Hindi  
+- Marathi  
+- Gujarati  
+- Tamil  
+- Telugu  
+- Bengali  
 
-🛡️ 3. Hard Safety Guardrails
+### 🛡 Hard Safety Guardrails
+- Blocks medical advice  
+- Blocks prescriptions  
+- Ensures responsible AI behavior  
 
-The assistant:
+---
 
-❌ Does not diagnose
+# 🧱 Architecture Diagram (Mermaid)
 
-❌ Does not prescribe medicines or doses
+```mermaid
+flowchart TD
 
-❌ Does not recommend treatments
+A[User Question] --> B[Language Detector]
+B --> C[Safety Guardrails]
 
-✅ Encourages consulting qualified healthcare professionals
+C -->|Allowed| D[RAG Pipeline]
+C -->|Blocked| Z[Safe Refusal]
 
-💻 4. Simple & Clean Web UI
+D --> E[FAISS Retriever]
+E --> F[Relevant Guideline Chunks]
 
-Built with Streamlit, the app:
+F --> G[Groq LLM (Llama/Mixtral)]
+G --> H[Answer Generator]
 
-Runs in a browser (desktop or mobile)
+H --> I[Streamlit UI Response]
+```
 
-Offers a smooth chat interface
+---
 
-Supports file uploads for guideline PDFs
+# 🖼️ Banner (SVG auto-generated)
 
-🏗️ Architecture
+Save this file as: **assets/banner.svg**
 
-LLM Backend: Groq (Llama/Mixtral models)
+```svg
+<svg width="1200" height="250" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="250" fill="#e8f5e9"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+        style="font-size:46px; font-family:Arial; fill:#2e7d32; font-weight:700;">
+    🌱 HealthSenseAI — Public Health Awareness Assistant
+  </text>
+  <text x="50%" y="75%" dominant-baseline="middle" text-anchor="middle"
+        style="font-size:22px; font-family:Arial; fill:#4a4a4a;">
+    Multilingual | Guideline-Based | Safe | Powered by Groq + FAISS
+  </text>
+</svg>
+```
 
-Orchestration: LangChain
+---
 
-Vector Store: FAISS
+# 🖼️ Social Preview Image (For GitHub SEO)
 
-Embeddings: sentence-transformers/all-MiniLM-L6-v2
+Create an image like below and save as:
 
-UI: Streamlit
+```
+/assets/social-preview.png
+```
 
-Deployment: Streamlit Cloud
+Upload in GitHub:
 
-📂 Project Structure
+`Settings → General → Social Preview → Upload`
+
+Preview:
+
+```
++--------------------------------------------------------------+
+| 🌱 HealthSenseAI                                             |
+| Public Health Awareness Assistant                            |
+|                                                              |
+| • Multilingual (7 Languages)                                 |
+| • Guideline-based RAG — Zero Hallucination                   |
+| • Powered by Groq + FAISS + Streamlit                        |
+|                                                              |
+| https://aihealthsense.streamlit.app                          |
++--------------------------------------------------------------+
+```
+
+---
+
+# 📁 Project Structure
+
+```
 HealthSenseAI/
 │
 ├── data/
@@ -103,246 +177,97 @@ HealthSenseAI/
 │   │   ├── Healthy Diet.pdf
 │   │   ├── Hypertension_full.pdf
 │   │   ├── WHO recommendation on diabetes care for women.pdf
-│   └── processed/
-│       └── faiss_index/
-│           ├── index.faiss
-│           └── index.pkl
+│   ├── processed/faiss_index/
+│       ├── index.faiss
+│       ├── index.pkl
 │
 ├── src/
-│   ├── app.py              # Streamlit UI
-│   ├── config.py           # Settings & LLM config
-│   ├── rag_pipeline.py     # RAG pipeline (load / index / retrieve / answer)
-│   ├── utils.py            # System prompts, language helpers
-│   ├── guards.py           # Safety & guardrail filters
+│   ├── app.py
+│   ├── config.py
+│   ├── rag_pipeline.py
+│   ├── utils.py
+│   ├── guards.py
 │
-├── .env                    # Secrets (not committed)
 ├── requirements.txt
-├── LICENSE                 # MIT License
+├── LICENSE
 └── README.md
+```
 
-⚙️ Setup & Local Run
-1️⃣ Create virtual environment
+---
+
+# ⚙️ Installation
+
+### 1️⃣ Create Virtual Environment
+```
 python -m venv .venv
-source .venv/bin/activate   # Linux / macOS
-# or
-.venv\Scripts\activate      # Windows
+.venv\Scripts\activate       # Windows
+source .venv/bin/activate   # macOS/Linux
+```
 
-2️⃣ Install dependencies
+### 2️⃣ Install Dependencies
+```
 pip install -r requirements.txt
+```
 
-3️⃣ Set up .env
-
-Create a .env file in the project root:
-
+### 3️⃣ Add `.env`
+```
 APP_ENV=dev
 LLM_PROVIDER=groq
-GROQ_API_KEY=your_groq_api_key_here
+GROQ_API_KEY=your_key_here
 GROQ_MODEL=llama-3.1-8b-instant
 DATA_RAW_DIR=data/raw
 INDEX_DIR=data/processed/faiss_index
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
 
-4️⃣ Add guideline PDFs
+---
 
-Place your guideline PDFs in:
+# ▶️ Run Locally
 
-data/raw/
-
-
-For example:
-
-Healthy Diet.pdf
-
-Hypertension_full.pdf
-
-WHO recommendation on diabetes care for women.pdf
-
-5️⃣ Run the app
+```
 streamlit run src/app.py
+```
 
+---
 
-Open the local URL shown in your terminal (e.g., http://localhost:8501).
+# 📝 Sample Questions (7 Languages)
 
-📸 Screenshots
+### English
+- What foods are recommended in a healthy Indian diet?  
+- How often should blood pressure be checked?  
+- What diabetes screening test is recommended for women?
 
-Replace the placeholders below with real images from your deployed app.
+### Hindi  
+- स्वस्थ आहार में क्या शामिल होना चाहिए?  
+- ब्लड प्रेशर कितनी बार जांचना चाहिए?  
+- महिलाओं के लिए डायबिटीज की कौन-सी जांच सुझाई गई है?
 
-🖼️ Home Screen
-[ Add screenshot: main HealthSenseAI page with title + disclaimer ]
+### Marathi  
+- संतुलित आहारात काय असावे?  
+- रक्तदाब किती वेळा तपासावा?  
+- महिलांसाठी मधुमेह तपासणी काय?
 
+### Gujarati  
+- સંતુલિત આહારમાં શું લેવુ જોઈએ?  
+- બ્લડ પ્રેશર ક્યારે તપાસવું?  
+- મહિલાઓ માટે ડાયાબિટીસ સ્ક્રીનિંગ શું?
 
-(Example: save as assets/home_screen.png and embed:)
+### Tamil  
+- ஆரோக்கிய உணவில் என்ன சேர்க்க வேண்டும்?  
+- இரத்த அழுத்தம் எவ்வளவு முறை பரிசோதிக்க வேண்டும்?
 
-![HealthSenseAI Home](assets/home_screen.png)
+### Telugu  
+- ఆరోగ్యకరమైన ఆహారంలో ఏమి ఉండాలి?  
+- రక్తపోటు ఎప్పుడు పరీక్షించాలి?
 
-💬 Chat Interface (English)
-[ Add screenshot: user asking about hypertension & AI answering from guidelines ]
+### Bengali  
+- স্বাস্থ্যকর খাদ্যে কী থাকা উচিত?  
+- রক্তচাপ কতবার পরীক্ষা করা উচিত?
 
-🌐 Chat Interface (Hindi / Regional Language)
-[ Add screenshot: user asking in Hindi/Marathi/Gujarati etc. ]
+---
 
-🏥 Why This App Matters (Especially in Developing Countries)
+# 🏷 License
 
-Millions lack access to specialist doctors.
+MIT License © 2025 Lavanya Srivastava
 
-Health guidelines exist (WHO/MoHFW), but are:
 
-Long
-
-Technical
-
-Mostly in English
-
-HealthSenseAI:
-
-Makes guidelines searchable
-
-Answers in simple language
-
-Supports multiple Indian languages
-
-Keeps strict safety (no diagnosis/prescription)
-
-This makes it ideal for:
-
-Rural health workers (ASHA / ANM)
-
-Community health volunteers
-
-NGOs in public health
-
-Telemedicine support teams
-
-Health awareness programs in schools & colleges
-
-🧪 Testing Questions from All 3 Guideline PDFs
-
-Use these sample questions to stress-test the RAG behaviour and show the importance of the app.
-
-1️⃣ Healthy Diet Guidelines
-
-English
-
-What foods should be included in a balanced Indian diet?
-
-How much sugar is recommended per day in a healthy diet?
-
-What do the guidelines say about fat intake and heart health?
-
-Hindi
-
-संतुलित भारतीय आहार में कौन-कौन से खाद्य पदार्थ शामिल होने चाहिए?
-
-रोज़ाना चीनी की कितनी मात्रा सुरक्षित मानी जाती है?
-
-वसा (फैट) के बारे में दिशा-निर्देश क्या कहते हैं?
-
-Gujarati
-
-સ્વસ્થ ભારતીય આહારમાં કયા ખોરાકનો સમાવેશ કરવો જોઈએ?
-
-એક દિવસમાં કેટલી ખાંડ લેવી યોગ્ય છે?
-
-ચરબીના સેવન અંગે માર્ગદર્શિકા શું કહે છે?
-
-2️⃣ Hypertension (High Blood Pressure) Guideline
-
-English
-
-What is the normal blood pressure range for adults as per the guideline?
-
-How frequently should adults be screened for hypertension?
-
-What lifestyle changes help in reducing the risk of high blood pressure?
-
-Tamil
-
-வழிகாட்டுதலின்படி பெரியவர்களுக்கான சாதாரண இரத்த அழுத்த அளவு எவ்வளவு?
-
-பெரியவர்களின் ரத்த அழுத்தம் எத்தனை கால இடைவெளிக்கு ஒரு முறை பரிசோதிக்க வேண்டும்?
-
-உயர் இரத்த அழுத்த அபாயத்தை குறைக்க எந்த வாழ்க்கை முறை மாற்றங்கள் உதவுகின்றன?
-
-Telugu
-
-మార్గదర్శకాల ప్రకారం పెద్దవారికి సాధారణ రక్తపోటు పరిధి ఎంత?
-
-పెద్దవారి రక్తపోటును ఎంత వ్యవధికి ఒకసారి పరీక్షించాలి?
-
-హైపర్‌టెన్షన్ ప్రమాదాన్ని తగ్గించడానికి ఏ జీవనశైలి మార్పులు సూచించబడ్డాయి?
-
-3️⃣ WHO Recommendations on Diabetes Care for Women
-
-English
-
-What are the risk factors for diabetes in women according to the guideline?
-
-How should diabetes be managed during pregnancy as per WHO?
-
-What lifestyle measures are recommended to reduce diabetes risk in women?
-
-Marathi
-
-मार्गदर्शक तत्त्वांनुसार महिलांमध्ये मधुमेहाचे जोखीम घटक कोणते आहेत?
-
-गर्भावस्थेदरम्यान मधुमेहाचे व्यवस्थापन कसे करावे, असे WHO काय सुचवते?
-
-महिलांमध्ये मधुमेहाचा धोका कमी करण्यासाठी कोणते जीवनशैलीतील बदल सुचवले आहेत?
-
-Bengali
-
-নির্দেশিকা অনুযায়ী মহিলাদের মধ্যে ডায়াবেটিসের ঝুঁকির কারণগুলো কী কী?
-
-WHO অনুযায়ী গর্ভাবস্থায় ডায়াবেটিস কীভাবে নিয়ন্ত্রণ করা উচিত?
-
-মহিলাদের ডায়াবেটিসের ঝুঁকি কমাতে কী কী জীবনধারা পরিবর্তন সুপারিশ করা হয়েছে?
-
-🔒 Ethical Disclaimer
-
-HealthSenseAI is strictly for public health awareness & education.
-
-It does not:
-
-Diagnose any disease
-
-Replace a doctor’s consultation
-
-Suggest medicines, doses, or treatment plans
-
-For any serious, persistent, or unclear symptoms, users should always consult:
-
-Registered doctors
-
-Local health centres
-
-Government health helplines
-
-🤝 Contributing
-
-Contributions are welcome!
-
-You can:
-
-Add new guideline PDFs (e.g., TB, maternal health, anaemia, dengue)
-
-Improve multilingual prompts and support
-
-Enhance UI/UX for low-literacy users
-
-Add voice input/output
-
-📜 License
-
-This project is licensed under the MIT License – see the LICENSE
- file for details.
-
-💛 Author
-
-Lavanya Srivastava
-AI Educator • Public Health Awareness Enthusiast • Agentic AI Developer
-
-Deployed App: https://aihealthsense.streamlit.app/
-
-GitHub: https://github.com/lavanya1402
-
-LinkedIn: (add your profile link here)
