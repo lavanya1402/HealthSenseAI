@@ -10,16 +10,6 @@
 
 **Live Demo:** 👉 https://aihealthsense.streamlit.app/
 
----
-
-## 🖼️ Project Banner
-
-+-------------------------------------------------------------+
-|                 HealthSenseAI – Public Health               |
-|     Multilingual, Guideline-Based Awareness Assistant       |
-|         Diabetes • Hypertension • Healthy Diet              |
-+-------------------------------------------------------------+
-
 ⭐ Overview
 
 HealthSenseAI is a multilingual AI assistant designed to improve public health awareness using official health guidelines like:
