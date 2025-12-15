@@ -1,7 +1,4 @@
-"""
-config.py
-Configuration & LLM client setup for HealthSenseAI.
-"""
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -10,67 +7,57 @@ from pathlib import Path
 from dotenv import load_dotenv
 from groq import Groq
 
-# Load environment variables from .env if present
 load_dotenv()
 
-# Project root: .../HealthSenseAI
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-
-@dataclass
+@dataclass(frozen=True)
 class Settings:
-    app_env: str
-    llm_provider: str
-    llm_model_name: str
-    groq_api_key: str
+    # ---- Paths (match your repo: src/data/raw) ----
+    base_dir: Path
+    data_dir: Path
     data_raw_dir: Path
     index_dir: Path
-    embedding_model_name: str
 
-    @classmethod
-    def from_env(cls) -> "Settings":
-        app_env = os.getenv("APP_ENV", "dev")
-        provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    # ---- Models ----
+    llm_model_name: str
+    embedding_model: str
 
-        if provider != "groq":
-            raise ValueError("Only 'groq' provider is supported at the moment.")
+    # ---- RAG knobs ----
+    top_k: int = 6
+    chunk_size: int = 900
+    chunk_overlap: int = 150
+    clear_score_threshold: float = 1.8
+    partial_score_threshold: float = 2.6
 
-        model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    @staticmethod
+    def from_env() -> "Settings":
+        base_dir = Path(__file__).resolve().parent  # src/
+        data_dir = base_dir / "data"
+        raw_dir = data_dir / "raw"
+        index_dir = data_dir / "index"
 
-        groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError("GROQ_API_KEY is missing in environment / .env file")
+        # ✅ Groq model updated (llama-3.3-70b-versatile is supported)
+        llm_model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-        # Default folders: HealthSenseAI/data/raw and HealthSenseAI/data/processed/faiss_index
-        data_raw_dir = Path(
-            os.getenv("DATA_RAW_DIR", str(PROJECT_ROOT / "data" / "raw"))
-        )
-        index_dir = Path(
-            os.getenv(
-                "INDEX_DIR",
-                str(PROJECT_ROOT / "data" / "processed" / "faiss_index"),
-            )
-        )
+        embedding_model = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
-        embedding_model_name = os.getenv(
-            "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
-        )
-
-        # Ensure directories exist
-        data_raw_dir.mkdir(parents=True, exist_ok=True)
-        index_dir.mkdir(parents=True, exist_ok=True)
-
-        return cls(
-            app_env=app_env,
-            llm_provider=provider,
-            llm_model_name=model_name,
-            groq_api_key=groq_api_key,
-            data_raw_dir=data_raw_dir,
+        return Settings(
+            base_dir=base_dir,
+            data_dir=data_dir,
+            data_raw_dir=raw_dir,
             index_dir=index_dir,
-            embedding_model_name=embedding_model_name,
+            llm_model_name=llm_model_name,
+            embedding_model=embedding_model,
+            top_k=int(os.getenv("TOP_K", "6")),
+            chunk_size=int(os.getenv("CHUNK_SIZE", "900")),
+            chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
+            clear_score_threshold=float(os.getenv("CLEAR_SCORE_THRESHOLD", "1.8")),
+            partial_score_threshold=float(os.getenv("PARTIAL_SCORE_THRESHOLD", "2.6")),
         )
 
 
 def get_llm(settings: Settings) -> Groq:
-    """Return a Groq client instance."""
-    return Groq(api_key=settings.groq_api_key)
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Missing GROQ_API_KEY in environment/.env")
+    return Groq(api_key=api_key)

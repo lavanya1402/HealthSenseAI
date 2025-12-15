@@ -1,304 +1,296 @@
 """
 rag_pipeline.py
-RAG pipeline for HealthSenseAI (Groq + LangChain + FAISS).
+HealthSenseAI - OCR-enabled STRICT RAG pipeline (FAISS + HuggingFace embeddings + Groq)
 
-Behaviour (STRICT RAG, zero hallucination):
-
-- If a FAISS index exists AND guideline chunks are retrieved:
-      → Answer ONLY from those guideline excerpts.
-- If no relevant excerpts are retrieved:
-      → Reply that the guideline does not provide information.
-- If FAISS index cannot be built / loaded:
-      → Reply that the guideline index is unavailable.
-
-All answers:
-- Are educational only (no diagnosis, no prescriptions).
-- Include a "Sources (public health guidelines)" section when RAG is used.
+- Supports SCANNED PDFs via OCR (UnstructuredPDFLoader strategy="ocr_only")
+- Builds/loads FAISS index from extracted text chunks
+- Strictly answers ONLY from retrieved excerpts
+- If not covered, returns STRICT_FALLBACK
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional, Tuple
 
-from groq import Groq
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.schema import Document
+from langchain_community.vectorstores import FAISS
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from config import Settings
+# ✅ OCR loader (for scanned PDFs)
+from langchain_community.document_loaders import UnstructuredPDFLoader
+
+from utils import build_system_prompt
 from guards import apply_guardrails
-from utils import build_system_prompt, LanguageCode
+
+STRICT_FALLBACK = "The guideline does not provide information on this topic."
+
+
+def _clean_source(src: str) -> str:
+    try:
+        return Path(src).name
+    except Exception:
+        return src or "Guideline"
+
+
+def _pick_raw_dir(settings: Any) -> Path:
+    # prefer settings.data_raw_dir if present, else raw_data_dir, else fallback
+    if hasattr(settings, "data_raw_dir"):
+        return Path(getattr(settings, "data_raw_dir"))
+    if hasattr(settings, "raw_data_dir"):
+        return Path(getattr(settings, "raw_data_dir"))
+    return Path("data/raw")
+
+
+def _hash_text(s: str) -> str:
+    return hashlib.sha256((s or "").encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _manifest_path(index_dir: Path) -> Path:
+    return index_dir / "manifest.json"
+
+
+def _build_pdf_manifest(pdf_dir: Path) -> Dict[str, Any]:
+    files = []
+    for p in sorted(pdf_dir.glob("*.pdf")):
+        try:
+            stat = p.stat()
+            files.append({"name": p.name, "size": stat.st_size, "mtime": int(stat.st_mtime)})
+        except Exception:
+            files.append({"name": p.name, "size": None, "mtime": None})
+    return {"pdf_dir": str(pdf_dir), "files": files}
+
+
+def _load_manifest(index_dir: Path) -> Optional[Dict[str, Any]]:
+    mp = _manifest_path(index_dir)
+    if not mp.exists():
+        return None
+    try:
+        return json.loads(mp.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_manifest(index_dir: Path, manifest: Dict[str, Any]) -> None:
+    _manifest_path(index_dir).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
 class HealthSenseRAG:
     """
-    HealthSenseAI RAG engine.
-
-    - Attempts to build / load a FAISS vector index from guideline PDFs.
-    - If text cannot be extracted (e.g., image-only PDFs), runs in
-      "index unavailable" mode and clearly reports that to the user.
+    Returns: (response_text, coverage_label, pairs)
+    coverage_label: CLEAR | PARTIAL | NONE
+    pairs: list[(Document, score)] for debugging
     """
 
-    def __init__(
-        self,
-        settings: Settings,
-        llm: Groq,
-        language: LanguageCode = "en",
-        top_k: int = 4,
-        chunk_size: int = 900,
-        chunk_overlap: int = 150,
-    ) -> None:
+    def __init__(self, settings, llm, language: str = "en"):
         self.settings = settings
-        self.client = llm
+        self.client = llm  # Groq client
         self.language = language
-        self.top_k = top_k
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
 
-        self._embedding = HuggingFaceEmbeddings(
-            model_name=self.settings.embedding_model_name
-        )
+        self.pdf_dir: Path = _pick_raw_dir(settings)
+        self.index_dir: Path = Path(getattr(settings, "index_dir", "data/index"))
 
-        self._vectorstore: FAISS | None = None
+        self.pdf_dir.mkdir(parents=True, exist_ok=True)
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+
+        self.top_k = int(getattr(settings, "top_k", 6))
+        self.chunk_size = int(getattr(settings, "chunk_size", 900))
+        self.chunk_overlap = int(getattr(settings, "chunk_overlap", 150))
+
+        # L2 distance (lower = better). Keep these moderate.
+        self.clear_score_threshold = float(getattr(settings, "clear_score_threshold", 1.20))
+        self.partial_score_threshold = float(getattr(settings, "partial_score_threshold", 2.20))
+
+        emb_name = getattr(settings, "embedding_model", None)
+        if not emb_name:
+            raise AttributeError("Settings.embedding_model missing.")
+        self.embeddings = HuggingFaceEmbeddings(model_name=emb_name)
+
+        self._vectorstore: Optional[FAISS] = None
         self.rag_enabled: bool = False
 
-    # ------------------------------------------------------------------
-    # Loading + Indexing
-    # ------------------------------------------------------------------
-    def _load_pdfs(self) -> List[Document]:
+    # ----------------------- Index helpers -----------------------
+    def _index_exists(self) -> bool:
+        return (self.index_dir / "index.faiss").exists() and (self.index_dir / "index.pkl").exists()
+
+    def _needs_rebuild(self) -> bool:
+        """Rebuild if PDFs changed since last index build."""
+        current = _build_pdf_manifest(self.pdf_dir)
+        saved = _load_manifest(self.index_dir)
+        return saved != current
+
+    def force_rebuild(self) -> None:
+        """Delete old index files safely and rebuild."""
+        for fn in ["index.faiss", "index.pkl", "manifest.json"]:
+            p = self.index_dir / fn
+            if p.exists():
+                p.unlink()
+        self._vectorstore = None
+        self.rag_enabled = False
+        self.build_or_load_index()
+
+    def _load_pdf_pages_with_ocr(self, pdf_path: Path):
         """
-        Load PDFs from data_raw_dir and attach metadata:
-        - source: filename (not full path, nicer in UI)
-        - page:   1-based page index
+        OCR loader for scanned PDFs.
+        Returns a list[Document].
         """
-        data_dir: Path = self.settings.data_raw_dir
-        print(f"[HealthSenseRAG] Looking for PDFs in: {data_dir.resolve()}")
-
-        pdf_files = list(data_dir.glob("*.pdf"))
-        if not pdf_files:
-            raise FileNotFoundError(
-                f"No PDFs found in {data_dir.resolve()}. "
-                "Please add WHO/CDC/MoHFW guideline PDFs there."
-            )
-
-        docs: List[Document] = []
-        for pdf_path in pdf_files:
-            print(f"[HealthSenseRAG] Loading PDF: {pdf_path.name}")
-            loader = PyPDFLoader(str(pdf_path))
-            pdf_docs = loader.load()
-
-            for i, d in enumerate(pdf_docs):
-                meta = dict(d.metadata or {})
-                # Normalise metadata for cleaner citations
-                meta["source"] = pdf_path.name
-                meta["page"] = i + 1
-                d.metadata = meta
-                docs.append(d)
-
-        print(
-            f"[HealthSenseRAG] Loaded {len(docs)} document pages from PDFs with metadata."
+        loader = UnstructuredPDFLoader(
+            str(pdf_path),
+            strategy="ocr_only",   # ✅ force OCR for scanned pages
+            mode="elements",       # produces smaller text elements
         )
-        return docs
-
-    def _split_documents(self, docs: List[Document]) -> List[Document]:
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap,
-        )
-        chunked_docs = splitter.split_documents(docs)
-        print(f"[HealthSenseRAG] Split into {len(chunked_docs)} chunks.")
-        return chunked_docs
+        return loader.load()
 
     def build_or_load_index(self) -> None:
-        """
-        Build a FAISS index from guideline PDFs, or load an existing one.
+        pdfs = sorted(self.pdf_dir.glob("*.pdf"))
+        if not pdfs:
+            self._vectorstore = None
+            self.rag_enabled = False
+            return
 
-        If anything goes wrong (no PDFs, no text, no chunks), RAG is disabled
-        and the app will respond with an "index unavailable" message.
-        """
-        index_path: Path = self.settings.index_dir
-        faiss_file = index_path / "index.faiss"
+        # If index exists but PDFs changed => rebuild
+        if self._index_exists() and self._needs_rebuild():
+            self.force_rebuild()
+            return
 
-        # 1) Load existing index
-        if faiss_file.exists():
-            print(f"[HealthSenseRAG] Loading FAISS index from: {index_path.resolve()}")
+        # Load if valid
+        if self._index_exists():
             self._vectorstore = FAISS.load_local(
-                str(index_path),
-                self._embedding,
+                str(self.index_dir),
+                self.embeddings,
                 allow_dangerous_deserialization=True,
             )
             self.rag_enabled = True
             return
 
-        # 2) Otherwise build new index
-        print("[HealthSenseRAG] Building new FAISS index from PDFs...")
+        # ✅ Build new index from OCR text
+        pages = []
+        for p in pdfs:
+            try:
+                pages.extend(self._load_pdf_pages_with_ocr(p))
+            except Exception:
+                # If one PDF fails OCR, skip it instead of crashing whole app
+                continue
 
-        try:
-            docs = self._load_pdfs()
-        except FileNotFoundError as e:
-            print(f"[HealthSenseRAG] No PDFs found: {e}")
+        # ✅ If OCR returns nothing, don't build empty FAISS
+        if not pages:
             self._vectorstore = None
             self.rag_enabled = False
             return
 
-        filtered_docs = [
-            d for d in docs if d.page_content and d.page_content.strip()
-        ]
-        print(
-            f"[HealthSenseRAG] Filtered pages with text: {len(filtered_docs)} "
-            f"(original: {len(docs)})"
+        # Split into chunks
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
         )
+        chunks = splitter.split_documents(pages)
 
-        if not filtered_docs:
-            print(
-                "[HealthSenseRAG] PDFs found but no readable text extracted. "
-                "Index cannot be built."
-            )
+        # ✅ Prevent IndexError / embed crash if chunks empty
+        chunks = [c for c in chunks if (c.page_content or "").strip()]
+        if not chunks:
             self._vectorstore = None
             self.rag_enabled = False
             return
 
-        chunked_docs = self._split_documents(filtered_docs)
-        if not chunked_docs:
-            print(
-                "[HealthSenseRAG] Splitting produced zero chunks. "
-                "Index cannot be built."
-            )
-            self._vectorstore = None
-            self.rag_enabled = False
-            return
+        self._vectorstore = FAISS.from_documents(chunks, self.embeddings)
+        self._vectorstore.save_local(str(self.index_dir))
 
-        vectorstore = FAISS.from_documents(chunked_docs, self._embedding)
-        index_path.mkdir(parents=True, exist_ok=True)
-        vectorstore.save_local(str(index_path))
-        print(f"[HealthSenseRAG] Saved FAISS index to: {index_path.resolve()}")
+        # Save manifest so we can detect PDF changes later
+        _save_manifest(self.index_dir, _build_pdf_manifest(self.pdf_dir))
 
-        self._vectorstore = vectorstore
         self.rag_enabled = True
 
-    # ------------------------------------------------------------------
-    # Retrieval
-    # ------------------------------------------------------------------
-    def retrieve_context(self, query: str) -> List[Document]:
-        """
-        Retrieve top-k similar chunks from FAISS.
+    # ----------------------- Retrieval -----------------------
+    def _coverage(self, pairs: List[Tuple[Any, float]]) -> str:
+        if not pairs:
+            return "NONE"
+        best = float(pairs[0][1])  # L2 distance lower=better
+        if best <= self.clear_score_threshold:
+            return "CLEAR"
+        if best <= self.partial_score_threshold:
+            return "PARTIAL"
+        return "NONE"
 
-        If RAG is disabled or index cannot be loaded, returns an empty list.
-        """
-        if not self.rag_enabled:
-            print("[HealthSenseRAG] RAG disabled – skipping retrieval.")
+    def retrieve_with_scores(self, user_query: str) -> List[Tuple[Any, float]]:
+        if not self._vectorstore:
             return []
+        pairs = self._vectorstore.similarity_search_with_score(user_query, k=self.top_k)
+        return [(d, float(s)) for d, s in pairs]
 
-        if self._vectorstore is None:
-            self.build_or_load_index()
-
-        if self._vectorstore is None:
-            print("[HealthSenseRAG] Vectorstore unavailable – skipping retrieval.")
-            return []
-
-        docs = self._vectorstore.similarity_search(query, k=self.top_k)
-
+    def _sources_block(self, docs: List[Any]) -> str:
+        seen = set()
+        lines = []
         for d in docs:
-            print(
-                f"[RAG] Retrieved from source={d.metadata.get('source')} "
-                f"page={d.metadata.get('page')}"
-            )
+            src = _clean_source(d.metadata.get("source", "Guideline"))
+            page = d.metadata.get("page", None)
+            key = (src, page)
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"- **{src}** — page {page}" if page is not None else f"- **{src}**")
+        if not lines:
+            return ""
+        return "\n\n---\n**Sources (guidelines)**\n" + "\n".join(lines)
 
-        return docs
-
-    # ------------------------------------------------------------------
-    # Answering (STRICT RAG)
-    # ------------------------------------------------------------------
-    def answer_query(self, user_query: str) -> str:
-        """
-        STRICT RAG ANSWERING (zero hallucination):
-
-        - If RAG is enabled and guideline chunks exist:
-              → Answer ONLY from those guideline excerpts.
-        - If no matching guideline text exists:
-              → Clearly say that the guideline does not provide
-                information on this topic.
-        - If RAG is disabled even after trying to build:
-              → Clearly say that the guideline index is unavailable.
-
-        All answers:
-        - Are educational only.
-        - Include a sources section when RAG is used.
-        """
-
-        # 0) If FAISS index not available, try (again) to build it.
-        if not self.rag_enabled or self._vectorstore is None:
-            print("[HealthSenseRAG] RAG not ready – attempting to (re)build index...")
+    # ----------------------- Answering (STRICT) -----------------------
+    def answer_query(self, user_query: str) -> Tuple[str, str, List[Tuple[Any, float]]]:
+        if not self.rag_enabled or not self._vectorstore:
             self.build_or_load_index()
 
-        # Still not available → give clean message
-        if not self.rag_enabled or self._vectorstore is None:
+        if not self.rag_enabled or not self._vectorstore:
             return (
                 "⚠️ **Guideline index unavailable**\n\n"
-                "HealthSenseAI could not access a WHO/CDC/MoHFW guideline index. "
-                "Please ensure that readable (text-based) PDFs are available in "
-                "`data/raw/` and that at least one of them contains selectable text "
-                "rather than only scanned images."
+                f"Either no PDFs exist in `{self.pdf_dir}`, or OCR could not extract text.\n\n"
+                "✅ Fix:\n"
+                "- Ensure PDFs are readable\n"
+                "- Install OCR deps: `unstructured pytesseract pdf2image pillow`\n"
+                "- Install Tesseract OCR (system)\n",
+                "NONE",
+                [],
             )
 
-        # 1) Retrieve guideline chunks
-        docs = self.retrieve_context(user_query)
+        pairs = self.retrieve_with_scores(user_query)
+        coverage = self._coverage(pairs)
 
-        # No matching guideline content
-        if not docs:
-            return (
-                "⚠️ **Guideline Not Found**\n\n"
-                "The uploaded guidelines do **not contain information clearly related** "
-                "to your question. Please upload additional WHO/CDC/MoHFW PDFs or "
-                "consult a qualified healthcare professional for advice."
-            )
+        if coverage == "NONE":
+            return STRICT_FALLBACK, "NONE", pairs
 
-        # 2) Prepare contextual excerpts for the LLM (not shown directly to the user)
-        context_for_llm: List[str] = []
+        docs = [d for d, _ in pairs]
+
+        excerpts = []
         for i, d in enumerate(docs, start=1):
-            src = d.metadata.get("source", "Guideline")
+            src = _clean_source(d.metadata.get("source", "Guideline"))
             page = d.metadata.get("page", "Unknown")
-            context_for_llm.append(
-                f"[Excerpt {i} | Source: {src} | Page: {page}]\n{d.page_content.strip()}"
-            )
+            excerpts.append(f"[Excerpt {i} | Source: {src} | Page: {page}]\n{(d.page_content or '').strip()}")
 
-        formatted_context = "\n\n".join(context_for_llm)
+        formatted_context = "\n\n".join(excerpts)
 
-        # 3) Base system prompt (language + safety framing)
-        base_system_prompt = build_system_prompt(self.language)
-
-        # 4) Strict RAG rules appended to system prompt
         system_prompt = (
-            base_system_prompt
-            + "\n\n"
-            "You must obey the following STRICT RULES:\n"
-            "- You MUST answer ONLY using the information in the provided guideline excerpts.\n"
-            "- You are **not allowed** to use outside medical knowledge or assumptions.\n"
-            "- If the excerpts do NOT contain enough information to answer, reply exactly:\n"
-            "  'The guideline does not provide information on this topic.'\n"
-            "- Do NOT invent or guess any facts.\n"
-            "- Do NOT provide diagnosis.\n"
-            "- Do NOT prescribe medicines, doses, or treatment plans.\n"
-            "- Keep the tone educational and supportive.\n"
-            "- Keep the answer concise: at most ~8 short bullet points or 200–250 words.\n"
-            "- Do NOT repeat the same sentence or phrase multiple times.\n"
+            build_system_prompt(self.language)
+            + "\n\nSTRICT RULES:\n"
+            "- Use ONLY the excerpts.\n"
+            f"- If NOT found in excerpts, reply EXACTLY: {STRICT_FALLBACK}\n"
+            "- No guessing/inference.\n\n"
+            "MANDATORY OUTPUT FORMAT:\n"
+            "Direct Answer:\n"
+            "- 2–6 bullets, simple patient guidance strictly from excerpt.\n\n"
+            "Guideline Evidence:\n"
+            "- Quote 1–2 exact lines verbatim as blockquote using (> ).\n"
         )
 
-        # 5) User message with context + question
         user_prompt = (
             f"### Guideline Excerpts\n{formatted_context}\n\n"
             f"### User Question\n{user_query}\n\n"
-            "### Task\n"
-            "Using ONLY the information in the excerpts above, give a short, clear answer "
-            "in the same language as the user. If the excerpts do not contain enough "
-            "information to safely answer, reply exactly:\n"
-            "'The guideline does not provide information on this topic.'"
+            "### Mandatory Output Format\n"
+            "Direct Answer:\n"
+            "- Give patient-friendly guidance strictly from excerpts.\n\n"
+            "Guideline Evidence:\n"
+            "- Quote exact supporting line(s) using blockquote (> ).\n\n"
+            f"If not present, say exactly:\n{STRICT_FALLBACK}"
         )
 
-        # 6) LLM call – temperature fixed to 0 for zero drift
         completion = self.client.chat.completions.create(
             model=self.settings.llm_model_name,
             messages=[
@@ -306,41 +298,17 @@ class HealthSenseRAG:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
-            # You can adjust if needed
-            max_tokens=400,
+            max_tokens=650,
         )
 
-        raw_answer = completion.choices[0].message.content.strip()
+        raw = completion.choices[0].message.content.strip()
+        safe, _ = apply_guardrails(user_query, raw)
 
-        # 7) Apply safety guardrails (medication / diagnosis filters etc.)
-        safe_answer = apply_guardrails(user_query, raw_answer)
+        # Hard enforcement: evidence must contain at least one blockquote line
+        if safe != STRICT_FALLBACK and ("Guideline Evidence:" in safe) and (">" not in safe):
+            safe = STRICT_FALLBACK
 
-        # 8) Generate citation section
-        seen = set()
-        lines: List[str] = []
+        if safe != STRICT_FALLBACK:
+            safe += self._sources_block(docs)
 
-        for d in docs:
-            src = d.metadata.get("source", None)
-            page = d.metadata.get("page", None)
-            if not src:
-                continue
-
-            key = (src, page)
-            if key in seen:
-                continue
-
-            seen.add(key)
-            if page is not None:
-                lines.append(f"- **{src}** — page {page}")
-            else:
-                lines.append(f"- **{src}**")
-
-        if lines:
-            citation_block = (
-                "\n\n---\n"
-                "**Sources (public health guidelines)**\n"
-                + "\n".join(lines)
-            )
-            safe_answer += citation_block
-
-        return safe_answer
+        return safe, coverage, pairs

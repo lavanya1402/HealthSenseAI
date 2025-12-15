@@ -1,19 +1,34 @@
-# ENV & Keys
+# -------------------------------
+# Python & Virtual Environments
+# -------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
 .env
 
-# Python
-.venv/
-__pycache__/
-*.pyc
-
+# -------------------------------
 # Streamlit
+# -------------------------------
 .streamlit/
 
-# Data folders
-data/raw/*
-data/processed/faiss_index/*
-src/data/raw/*
-src/data/processed/*
+# -------------------------------
+# Data / Indexes (DO NOT COMMIT)
+# -------------------------------
+data/
+data/index/
+models/
 
-# PDFs
-*.pdf
+# -------------------------------
+# OS files
+# -------------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------------
+# IDEs
+# -------------------------------
+.vscode/
+.idea/

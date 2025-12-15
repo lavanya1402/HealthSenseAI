@@ -1,270 +1,216 @@
-"""
-# ------------------------------------------------------------
-# HealthSenseAI
-# Created & Developed by: Lavanya Srivastava
-# Purpose: Public Health Awareness using Generative AI + RAG
-# Educational use only – not a medical diagnostic system
-# ------------------------------------------------------------
+from __future__ import annotations
 
-app.py
-Streamlit UI for HealthSenseAI (Groq + RAG).
-
-Run with:
-    streamlit run src/app.py
-"""
+import re
+from pathlib import Path
 
 import streamlit as st
 
 from config import Settings, get_llm
 from rag_pipeline import HealthSenseRAG
+from utils import LanguageCode
+
+STRICT_FALLBACK = "The guideline does not provide information on this topic."
+
+
+# ---------------------- Language detection ----------------------
+def detect_language_code(text: str) -> LanguageCode:
+    t = text or ""
+    if re.search(r"[\u0980-\u09FF]", t):  # Bengali
+        return "bn"
+    if re.search(r"[\u0A80-\u0AFF]", t):  # Gujarati
+        return "gu"
+    if re.search(r"[\u0B80-\u0BFF]", t):  # Tamil
+        return "ta"
+    if re.search(r"[\u0C00-\u0C7F]", t):  # Telugu
+        return "te"
+    if re.search(r"[\u0900-\u097F]", t):  # Hindi / Devanagari
+        return "hi"
+    return "en"
+
+
+def coverage_badge(label: str) -> str:
+    if label == "CLEAR":
+        return "🟢 Guideline coverage: Clear"
+    if label == "PARTIAL":
+        return "🟡 Guideline coverage: Partial"
+    return "🔴 Guideline coverage: Not covered"
 
 
 def init_session_state() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "prefill_question" not in st.session_state:
+        st.session_state.prefill_question = ""
+
+
+# ---------------------- ONLY WORKING EXAMPLES ----------------------
+EXAMPLE_QUESTIONS = [
+    # EN
+    "After pregnancy, how should women with a history of gestational diabetes be followed up?",
+    # HI
+    "हाई ब्लड प्रेशर रोकने के लिए कौन-से जीवनशैली बदलाव सुझाए गए हैं?",
+    # MR
+    "वयस्क व्यक्तीत कोणत्या रक्तदाब पातळीवर उच्च रक्तदाब (हायपरटेंशन) निदान केले जाते?",
+    # GU
+    "માર્ગદર્શિકા મુજબ પુખ્ત લોકોએ બ્લડ પ્રેશર ચેક કેટલા સમયાંતરે કરાવવું જોઈએ?",
+    # TA
+    "உயர் இரத்த அழுத்தம் உள்ளவர்களுக்கு உடனடி மருத்துவ உதவி தேவைப்படுகிறதா என்பதை காட்டும் எத்தகைய எச்சரிக்கை அறிகுறிகள் உள்ளன?",
+    # TE
+    "మార్గదర్శక ప్రకారం పెద్దవారు ఎంత కాల వ్యవధిలో ఒకసారి రక్తపోటు చెక్ చేయించుకోవాలి?",
+    # BN
+    "গাইডলাইন অনুযায়ী কোন কোন নারীকে ডায়াবেটিস হওয়ার উচ্চ ঝুঁকিপূর্ণ হিসেবে ধরা হয়?",
+]
 
 
 def main() -> None:
-    # -------------------- Page configuration --------------------
-    st.set_page_config(
-        page_title="HealthSenseAI – Public Health Awareness Assistant",
-        page_icon="🩺",
-        layout="wide",
-    )
-
+    st.set_page_config(page_title="HealthSenseAI", page_icon="🩺", layout="wide")
     init_session_state()
 
-    # -------------------- Header styling --------------------
+    # ---------------------- Styling ----------------------
     st.markdown(
         """
         <style>
-        .main-title {
-            font-size: 3rem;
-            font-weight: 800;
-            margin-bottom: 0.3rem;
-        }
-        .creator {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: #0d6efd;
-            margin-bottom: 0.6rem;
-        }
-        .sub-title {
-            font-size: 1.1rem;
-            color: #6c757d;
-            margin-bottom: 1.4rem;
-        }
+        .hs-title { font-size: 2.7rem; font-weight: 900; margin-bottom: 0.2rem; }
+        .hs-sub { font-size: 1.05rem; color: #6b7280; margin-bottom: 0.6rem; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="main-title">HealthSenseAI</div>', unsafe_allow_html=True)
+    # ---------------------- Header ----------------------
+    st.markdown('<div class="hs-title">HealthSenseAI</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="creator">👩‍💻 Created & Developed by <strong>Lavanya Srivastava</strong></div>',
+        '<div class="hs-sub">A guideline-grounded assistant for public health awareness & early risk guidance. Educational use only — not a diagnostic tool.</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div class="sub-title">'
-        'A Generative AI Assistant for <strong>Public Health Awareness & Early Risk Guidance</strong>. '
-        'Educational use only – not a diagnostic tool.'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("")
 
-    # Load settings once (shared by sidebar and main area)
+    # 🌸 BIG COLOURED NAME (GUARANTEED VISIBLE)
+    st.markdown(
+        """
+        <div style="
+            font-size: 1.3rem;
+            font-weight: 900;
+            margin-bottom: 1.4rem;
+        ">
+            Built by 
+            <span style="
+                background: linear-gradient(90deg, #2563eb, #9333ea);
+                color: white;
+                padding: 6px 14px;
+                border-radius: 999px;
+                font-size: 1.25rem;
+                font-weight: 900;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            ">
+                🌸 Lavanya Srivastava
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ---------------------- Settings + Engine ----------------------
     settings = Settings.from_env()
+    llm = get_llm(settings)
+    rag_engine = HealthSenseRAG(settings=settings, llm=llm, language="en")
 
-    # -------------------- Sidebar --------------------
+    # ---------------------- Sidebar ----------------------
     with st.sidebar:
         st.header("Settings")
-        st.write(
-            "You can type your question in any language. "
-            "The assistant will reply in the same language."
+        language_mode = st.selectbox(
+            "Response language",
+            ["auto", "en", "hi", "bn", "te", "ta", "gu"],
+            index=0,
         )
 
-        st.markdown("---")
-        st.subheader("Knowledge Base")
+        st.divider()
+        st.subheader("✅ Example Questions (working)")
+        st.caption("Click to auto-fill the question.")
 
-        uploaded_pdfs = st.file_uploader(
-            "Upload health guideline PDFs (WHO / MoHFW / national):",
+        for q in EXAMPLE_QUESTIONS:
+            if st.button(q, use_container_width=True):
+                st.session_state.prefill_question = q
+
+        st.divider()
+        st.subheader("Debug")
+        show_pairs = st.checkbox("Show retrieved excerpts", value=False)
+
+        st.divider()
+        st.subheader("Knowledge Base")
+        st.caption("Upload WHO / CDC / MoHFW guideline PDFs (text-based preferred).")
+
+        existing_pdfs = sorted(Path(settings.data_raw_dir).glob("*.pdf"))
+        st.caption(f"📄 PDFs in KB: **{len(existing_pdfs)}**")
+
+        uploaded = st.file_uploader(
+            "Upload health guideline PDFs",
             type=["pdf"],
             accept_multiple_files=True,
-            help="Files will be stored in the project’s data/raw directory.",
         )
 
-        if uploaded_pdfs:
-            saved_files = []
-            for up_file in uploaded_pdfs:
-                save_path = settings.data_raw_dir / up_file.name
-                with open(save_path, "wb") as f:
-                    f.write(up_file.getbuffer())
-                saved_files.append(up_file.name)
-
-            st.success(
-                f"Uploaded {len(saved_files)} PDF file(s). "
-                "Restart the app so that they are included in the index."
-            )
-
-        pdf_count = len(list(settings.data_raw_dir.glob("*.pdf")))
-        st.caption(
-            f"Guideline PDF files currently detected in data/raw/: **{pdf_count}**"
-        )
-
-        st.markdown(
-            "- Place WHO / national guideline PDFs in `data/raw/`.\n"
-            "- The app automatically (re)builds a FAISS index from these files at startup."
-        )
-
-        st.markdown("---")
-        st.subheader("Disclaimer")
+        st.divider()
         st.info(
-            "This assistant is designed for public health education only.\n\n"
-            "- It does not provide diagnosis or treatment.\n"
-            "- It does not prescribe medication or dosages.\n"
-            "- It should not replace consultation with qualified healthcare professionals."
+            "Important:\n"
+            "- No diagnosis / no treatment plans.\n"
+            "- STRICT RAG: answers ONLY from retrieved guideline excerpts.\n"
+            f"- If not covered: returns '{STRICT_FALLBACK}'.\n"
         )
 
-    # -------------------- RAG Engine --------------------
-    llm = get_llm(settings)
-    rag_engine = HealthSenseRAG(settings=settings, llm=llm)
+    # ---------------------- Save PDFs + rebuild index ----------------------
+    if uploaded:
+        settings.data_raw_dir.mkdir(parents=True, exist_ok=True)
+        for f in uploaded:
+            (settings.data_raw_dir / f.name).write_bytes(f.read())
 
-    # Build index ONCE at app start
-    rag_engine.build_or_load_index()
+        st.sidebar.success(f"Uploaded {len(uploaded)} file(s) ✅")
+        rag_engine.force_rebuild()
+        st.sidebar.info("Index rebuilt ✅")
 
-    # -------------------- Main Chat Area --------------------
     st.markdown("### Ask a health awareness question")
 
-    with st.expander("Examples (from your guideline PDFs)", expanded=False):
-        st.markdown(
-            """
-### ❤️‍🩹 1) Hypertension_full.pdf – Sample Questions
-
-**🇬🇧 ENGLISH (EN)**
-- What lifestyle changes are recommended to prevent high blood pressure?
-- At what blood pressure level is hypertension usually diagnosed in adults?
-- How often should adults have their blood pressure checked according to the guideline?
-- What warning signs suggest that a person with hypertension should seek urgent medical care?
-
-**🇮🇳 हिंदी (HI)**
-- हाई ब्लड प्रेशर रोकने के लिए कौन-से जीवनशैली बदलाव सुझाए गए हैं?
-- वयस्कों में किस स्तर पर ब्लड प्रेशर होने पर उसे हाईपरटेंशन माना जाता है?
-- दिशा-निर्देशों के अनुसार वयस्कों को ब्लड प्रेशर की जांच कितनी बार करानी चाहिए?
-- हाईपरटेंशन वाले व्यक्ति को तुरंत डॉक्टर के पास जाने की जरूरत होने के कौन-से चेतावनी लक्षण हैं?
-
-**🇮🇳 मराठी (MR)**
-- उच्च रक्तदाब टाळण्यासाठी कोणते जीवनशैली बदल करण्याची शिफारस आहे?
-- वयस्क व्यक्तीत कोणत्या रक्तदाब पातळीवर उच्च रक्तदाब (हायपरटेंशन) निदान केले जाते?
-- मार्गदर्शक सूचनांनुसार प्रौढांनी रक्तदाब तपासणी किती वेळा करावी?
-- उच्च रक्तदाब असलेल्या रुग्णाने तातडीने डॉक्टरांकडे जावे असे कोणते इशारे / लक्षणे आहेत?
-
-**🇮🇳 ગુજરાતી (GU)**
-- હાઇ બ્લડ પ્રેશર અટકાવવા માટે કયા જીવનશૈલી પરિવર્તનોની ભલામણ કરવામાં આવી છે?
-- પુખ્ત વયના લોકોમાં કયા બ્લડ પ્રેશર સ્તરે હાઇપરટેન્શન માનવામાં આવે છે?
-- માર્ગદર્શિકા મુજબ પુખ્ત લોકોએ બ્લડ પ્રેશર ચેક કેટલા સમયાંતરે કરાવવું જોઈએ?
-- હાઇપરટેન્શન ધરાવતા વ્યક્તિએ તાત્કાલિક ડૉક્ટરને મળવા માટે કયા ચેતવણી લક્ષણો ધ્યાનમાં લેવાં જોઈએ?
-
-**🇮🇳 தமிழ் (TA)**
-- உயர் இரத்த அழுத்தத்தைத் தடுக்க எந்த வாழ்க்கைமுறை மாற்றங்கள் பரிந்துரைக்கப்படுகின்றன?
-- பெரியவர்களில் எந்த அளவுக்கு இரத்த அழுத்தம் இருந்தால் உயர் இரத்த அழுத்தம் (hypertension) என்று கருதப்படும்?
-- வழிகாட்டி படி பெரியவர்கள் எத்தனை இடைவெளியில் இரத்த அழுத்தத்தை பரிசோதிக்க வேண்டும்?
-- உயர் இரத்த அழுத்தம் உள்ளவர்களுக்கு உடனடி மருத்துவ உதவி தேவைப்படுகிறதா என்பதை காட்டும் எத்தகைய எச்சரிக்கை அறிகுறிகள் உள்ளன?
-
-**🇮🇳 తెలుగు (TE)**
-- హై బ్లడ్ ప్రెజర్‌ను నివారించడానికి ఏ జీవనశైలి మార్పులను మార్గదర్శకాలు సూచిస్తాయి?
-- పెద్దలలో ఏ స్థాయి రక్తపోటు వచ్చినప్పుడు దాన్ని హైపర్‌టెన్షన్‌గా పరిగణిస్తారు?
-- మార్గదర్శక ప్రకారం పెద్దవారు ఎంత కాల వ్యవధిలో ఒకసారి రక్తపోటు చెక్ చేయించుకోవాలి?
-- హైపర్‌టెన్షన్ ఉన్న వ్యక్తి తక్షణ వైద్య సహాయం తీసుకోవలసిన ప్రమాద సూచనలు ఏమిటి?
-
-**🇧🇩 বাংলা (BN)**
-- উচ্চ রক্তচাপ প্রতিরোধে কোন কোন জীবনযাপন পরিবর্তনের সুপারিশ করা হয়েছে?
-- প্রাপ্তবয়স্কদের মধ্যে কোন স্তরের রক্তচাপকে সাধারণত হাইপারটেনশন বলা হয়?
-- গাইডলাইন অনুযায়ী প্রাপ্তবয়স্কদের কত সময় অন্তর রক্তচাপ পরীক্ষা করা উচিত?
-- উচ্চ রক্তচাপের রোগীর অবিলম্বে ডাক্তার দেখানো প্রয়োজন, এমন কোন সতর্কতামূলক লক্ষণগুলো আছে?
-
-
----
-
-### 👩‍🍼 2) WHO recommendation on diabetes care for women.pdf – Sample Questions
-
-**🇬🇧 ENGLISH (EN)**
-- Which women are considered at higher risk of developing diabetes according to the guideline?
-- What screening tests are recommended for women who are at risk of diabetes?
-- What dietary advice is given to women living with diabetes?
-- After pregnancy, how should women with a history of gestational diabetes be followed up?
-
-**🇮🇳 हिंदी (HI)**
-- दिशा-निर्देशों के अनुसार किन महिलाओं को मधुमेह होने का अधिक जोखिम माना जाता है?
-- मधुमेह के खतरे वाली महिलाओं के लिए कौन-कौन से स्क्रीनिंग टेस्ट सुझाए गए हैं?
-- मधुमेह से पीड़ित महिलाओं के लिए क्या आहार संबंधी सलाह दी गई है?
-- गर्भावस्था में गर्भकालीन मधुमेह रहा हो तो डिलीवरी के बाद महिलाओं की फॉलो-अप जांच कैसे की जानी चाहिए?
-
-**🇮🇳 मराठी (MR)**
-- मार्गदर्शक सूचनांनुसार मधुमेह होण्याचा जास्त धोका कोणत्या महिलांना असतो?
-- मधुमेहाच्या धोक्यात असलेल्या महिलांसाठी कोणत्या स्क्रीनिंग चाचण्या शिफारस केल्या आहेत?
-- मधुमेह असलेल्या महिलांसाठी कोणते आहार मार्गदर्शन दिले आहे?
-- गर्भधारणेदरम्यान गेस्टेशनल डायबिटीज झालेल्या महिलांचे प्रसूतीनंतर फॉलो-अप कसे करावे अशी शिफारस आहे?
-
-**🇮🇳 ગુજરાતી (GU)**
-- માર્ગદર્શિકા મુજબ કઈ મહિલાઓને ડાયાબિટીસનો વધુ જોખમ ધરાવતા રૂપે ગણવામાં આવે છે?
-- ડાયાબિટીસના જોખમ ધરાવતી મહિલાઓ માટે કયા સ્ક્રીનિંગ ટેસ્ટની ભલામણ કરવામાં આવી છે?
-- ડાયાબિટીસ ધરાવતી મહિલાઓ માટે કઈ આહાર સંબંધિત સલાહ આપવામાં આવી છે?
-- ગર્ભાવસ્થા દરમિયાન ગેસ્ટેશનલ ડાયાબિટીસ થયેલી મહિલાઓની ડિલિવરી પછી ફોલો-અપ કેવી રીતે કરવો?
-
-**🇮🇳 தமிழ் (TA)**
-- வழிகாட்டி படி எந்த பெண்கள் நீரிழிவு நோய் ஏற்படும் அதிக ஆபத்தில் உள்ளவர்களாக கருதப்படுகின்றனர்?
-- நீரிழிவு ஆபத்தில் உள்ள பெண்களுக்கு எந்த ஸ்க்ரீனிங் பரிசோதனைகள் பரிந்துரைக்கப்படுகின்றன?
-- நீரிழிவு உள்ள பெண்களுக்கு எந்த உணவு பரிந்துரைகள் கூறப்பட்டுள்ளன?
-- கர்ப்ப காலத்தில் gestational diabetes இருந்த பெண்களுக்கு பிரசவத்திற்குப் பிறகு எப்படிப்பட்ட பின்தொடர் (follow-up) பராமரிப்பு செய்ய வேண்டும்?
-
-**🇮🇳 తెలుగు (TE)**
-- మార్గదర్శక ప్రకారం ఏ మహిళలను డయాబెటీస్ వచ్చే అధిక ప్రమాద గుంపుగా పరిగణిస్తారు?
-- డయాబెటీస్ ప్రమాదంలో ఉన్న మహిళలకు ఏ స్క్రీనింగ్ పరీక్షలను సూచిస్తున్నారు?
-- డయాబెటీస్ ఉన్న మహిళలకు ఏ విధమైన ఆహార సూచనలు ఉన్నాయి?
-- గర్భధారణ సమయంలో గెస్టేషనల్ డయాబెటీస్ వచ్చిన మహిళలకు డెలివరీ తర్వాత ఎలా follow-up చేయాలని మార్గదర్శకాలు చెబుతాయి?
-
-**🇧🇩 বাংলা (BN)**
-- গাইডলাইন অনুযায়ী কোন কোন নারীকে ডায়াবেটিস হওয়ার উচ্চ ঝুঁকপূর্ণ হিসেবে ধরা হয়?
-- ডায়াবেটিসের ঝুঁকিতে থাকা নারীদের জন্য কোন স্ক্রিনিং পরীক্ষার সুপারিশ করা হয়েছে?
-- ডায়াবেটিসে আক্রান্ত নারীদের জন্য কী ধরনের খাদ্যাভ্যাসের পরামর্শ দেওয়া হয়েছে?
-- গর্ভাবস্থায় গেস্টেশনাল ডায়াবেটিস থাকা নারীদের প্রসবের পর কীভাবে ফলো-আপ করা উচিত বলে নির্দেশিকায় উল্লেখ আছে?
-"""
-        )
-
-    # Display conversation history
+    # ---------------------- Chat history ----------------------
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
+    # ---------------------- Chat input (with auto-fill) ----------------------
     user_input = st.chat_input(
-        "Type a question about symptoms, prevention, lifestyle, or screenings..."
+        "Type a question about prevention, lifestyle, screenings..."
     )
 
+    if st.session_state.prefill_question and not user_input:
+        user_input = st.session_state.prefill_question
+        st.session_state.prefill_question = ""
+
     if user_input:
-        # Store and display user message
+        lang = detect_language_code(user_input) if language_mode == "auto" else language_mode
+        rag_engine.language = lang  # type: ignore
+
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Generate and display assistant response
         with st.chat_message("assistant"):
-            with st.spinner("Consulting public health guidelines..."):
-                try:
-                    response = rag_engine.answer_query(user_input)
-                except Exception as e:
-                    st.error(f"An error occurred while generating the answer: {e}")
-                    return
+            with st.spinner("Checking guideline excerpts..."):
+                response, coverage, pairs = rag_engine.answer_query(user_input)
 
-                st.markdown(response)
+            st.markdown(f"**{coverage_badge(coverage)}**")
+            st.markdown(response)
 
-        st.session_state.messages.append({"role": "assistant", "content": response})
+            if show_pairs and pairs:
+                st.divider()
+                st.caption("Retrieved chunks (score: lower is better):")
+                for d, s in pairs:
+                    src = d.metadata.get("source", "Guideline")
+                    page = d.metadata.get("page", "Unknown")
+                    st.write(f"- {src} — page {page} | score: {float(s):.4f}")
 
-    st.markdown(
-        "---\n"
-        "Developed as an educational project demonstrating Generative AI + Retrieval-Augmented Generation (RAG) "
-        "for public health awareness. Always seek advice from licensed medical professionals for any personal health concerns."
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+    st.markdown("---")
+    st.caption(
+        "Developed as an educational project demonstrating Generative AI + RAG for public health awareness. "
+        "Always consult licensed medical professionals for personal medical concerns."
     )
 
 
