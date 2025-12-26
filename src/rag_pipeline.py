@@ -1,9 +1,9 @@
 """
 rag_pipeline.py
-HealthSenseAI - OCR-enabled STRICT RAG pipeline (FAISS + HuggingFace embeddings + Groq)
+HealthSenseAI - STRICT RAG pipeline (FAISS + HuggingFace embeddings + Groq)
 
-- Supports SCANNED PDFs via OCR (UnstructuredPDFLoader strategy="ocr_only")
-- Builds/loads FAISS index from extracted text chunks
+- NO OCR (works with text-based PDFs only)
+- Builds/loads FAISS index from extracted PDF text chunks
 - Strictly answers ONLY from retrieved excerpts
 - If not covered, returns STRICT_FALLBACK
 """
@@ -15,12 +15,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# ✅ OCR loader (for scanned PDFs)
-from langchain_community.document_loaders import UnstructuredPDFLoader
 
 from utils import build_system_prompt
 from guards import apply_guardrails
@@ -28,20 +26,12 @@ from guards import apply_guardrails
 STRICT_FALLBACK = "The guideline does not provide information on this topic."
 
 
+# --------------------------- small helpers ---------------------------
 def _clean_source(src: str) -> str:
     try:
         return Path(src).name
     except Exception:
         return src or "Guideline"
-
-
-def _pick_raw_dir(settings: Any) -> Path:
-    # prefer settings.data_raw_dir if present, else raw_data_dir, else fallback
-    if hasattr(settings, "data_raw_dir"):
-        return Path(getattr(settings, "data_raw_dir"))
-    if hasattr(settings, "raw_data_dir"):
-        return Path(getattr(settings, "raw_data_dir"))
-    return Path("data/raw")
 
 
 def _hash_text(s: str) -> str:
@@ -77,6 +67,19 @@ def _save_manifest(index_dir: Path, manifest: Dict[str, Any]) -> None:
     _manifest_path(index_dir).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+def _resolve_dir(settings: Any, attr_name: str, default_rel: str, base_dir: Path) -> Path:
+    """
+    Make paths stable irrespective of where Streamlit is launched from.
+    If settings has the attribute and it's relative, resolve it against base_dir.
+    """
+    val = getattr(settings, attr_name, None)
+    if val:
+        p = Path(val)
+        return p if p.is_absolute() else (base_dir / p).resolve()
+    return (base_dir / default_rel).resolve()
+
+
+# --------------------------- main RAG class ---------------------------
 class HealthSenseRAG:
     """
     Returns: (response_text, coverage_label, pairs)
@@ -89,8 +92,12 @@ class HealthSenseRAG:
         self.client = llm  # Groq client
         self.language = language
 
-        self.pdf_dir: Path = _pick_raw_dir(settings)
-        self.index_dir: Path = Path(getattr(settings, "index_dir", "data/index"))
+        # base_dir should be src/ (your config uses base_dir=Path(__file__).parent)
+        base_dir = Path(getattr(settings, "base_dir", Path(__file__).resolve().parent)).resolve()
+
+        # ✅ Stable paths even if you run from /src or from project root
+        self.pdf_dir: Path = _resolve_dir(settings, "data_raw_dir", "data/raw", base_dir)
+        self.index_dir: Path = _resolve_dir(settings, "index_dir", "data/index", base_dir)
 
         self.pdf_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir.mkdir(parents=True, exist_ok=True)
@@ -99,7 +106,7 @@ class HealthSenseRAG:
         self.chunk_size = int(getattr(settings, "chunk_size", 900))
         self.chunk_overlap = int(getattr(settings, "chunk_overlap", 150))
 
-        # L2 distance (lower = better). Keep these moderate.
+        # L2 distance (lower = better).
         self.clear_score_threshold = float(getattr(settings, "clear_score_threshold", 1.20))
         self.partial_score_threshold = float(getattr(settings, "partial_score_threshold", 2.20))
 
@@ -116,13 +123,11 @@ class HealthSenseRAG:
         return (self.index_dir / "index.faiss").exists() and (self.index_dir / "index.pkl").exists()
 
     def _needs_rebuild(self) -> bool:
-        """Rebuild if PDFs changed since last index build."""
         current = _build_pdf_manifest(self.pdf_dir)
         saved = _load_manifest(self.index_dir)
         return saved != current
 
     def force_rebuild(self) -> None:
-        """Delete old index files safely and rebuild."""
         for fn in ["index.faiss", "index.pkl", "manifest.json"]:
             p = self.index_dir / fn
             if p.exists():
@@ -131,16 +136,12 @@ class HealthSenseRAG:
         self.rag_enabled = False
         self.build_or_load_index()
 
-    def _load_pdf_pages_with_ocr(self, pdf_path: Path):
+    def _load_pdf_pages_no_ocr(self, pdf_path: Path):
         """
-        OCR loader for scanned PDFs.
+        Text-based PDF loader (NO OCR).
         Returns a list[Document].
         """
-        loader = UnstructuredPDFLoader(
-            str(pdf_path),
-            strategy="ocr_only",   # ✅ force OCR for scanned pages
-            mode="elements",       # produces smaller text elements
-        )
+        loader = PyPDFLoader(str(pdf_path))
         return loader.load()
 
     def build_or_load_index(self) -> None:
@@ -165,30 +166,33 @@ class HealthSenseRAG:
             self.rag_enabled = True
             return
 
-        # ✅ Build new index from OCR text
+        # Build new index from PDF text (NO OCR)
         pages = []
         for p in pdfs:
             try:
-                pages.extend(self._load_pdf_pages_with_ocr(p))
+                pages.extend(self._load_pdf_pages_no_ocr(p))
             except Exception:
-                # If one PDF fails OCR, skip it instead of crashing whole app
                 continue
 
-        # ✅ If OCR returns nothing, don't build empty FAISS
         if not pages:
             self._vectorstore = None
             self.rag_enabled = False
             return
 
-        # Split into chunks
+        # Filter out empty pages early
+        pages = [d for d in pages if (d.page_content or "").strip()]
+        if not pages:
+            self._vectorstore = None
+            self.rag_enabled = False
+            return
+
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
         )
         chunks = splitter.split_documents(pages)
-
-        # ✅ Prevent IndexError / embed crash if chunks empty
         chunks = [c for c in chunks if (c.page_content or "").strip()]
+
         if not chunks:
             self._vectorstore = None
             self.rag_enabled = False
@@ -197,16 +201,14 @@ class HealthSenseRAG:
         self._vectorstore = FAISS.from_documents(chunks, self.embeddings)
         self._vectorstore.save_local(str(self.index_dir))
 
-        # Save manifest so we can detect PDF changes later
         _save_manifest(self.index_dir, _build_pdf_manifest(self.pdf_dir))
-
         self.rag_enabled = True
 
     # ----------------------- Retrieval -----------------------
     def _coverage(self, pairs: List[Tuple[Any, float]]) -> str:
         if not pairs:
             return "NONE"
-        best = float(pairs[0][1])  # L2 distance lower=better
+        best = float(pairs[0][1])
         if best <= self.clear_score_threshold:
             return "CLEAR"
         if best <= self.partial_score_threshold:
@@ -242,11 +244,16 @@ class HealthSenseRAG:
         if not self.rag_enabled or not self._vectorstore:
             return (
                 "⚠️ **Guideline index unavailable**\n\n"
-                f"Either no PDFs exist in `{self.pdf_dir}`, or OCR could not extract text.\n\n"
+                f"KB folder: `{self.pdf_dir}`\n"
+                f"Index folder: `{self.index_dir}`\n\n"
+                "Either:\n"
+                "- No PDFs exist in the KB folder, OR\n"
+                "- PDFs are scanned/image-based (NO OCR enabled), OR\n"
+                "- PDF text extraction returned empty.\n\n"
                 "✅ Fix:\n"
-                "- Ensure PDFs are readable\n"
-                "- Install OCR deps: `unstructured pytesseract pdf2image pillow`\n"
-                "- Install Tesseract OCR (system)\n",
+                "- Use text-based PDFs (selectable text)\n"
+                "- Put PDFs into the KB folder shown above\n"
+                "- Delete index folder files and re-run\n",
                 "NONE",
                 [],
             )
@@ -263,7 +270,9 @@ class HealthSenseRAG:
         for i, d in enumerate(docs, start=1):
             src = _clean_source(d.metadata.get("source", "Guideline"))
             page = d.metadata.get("page", "Unknown")
-            excerpts.append(f"[Excerpt {i} | Source: {src} | Page: {page}]\n{(d.page_content or '').strip()}")
+            excerpts.append(
+                f"[Excerpt {i} | Source: {src} | Page: {page}]\n{(d.page_content or '').strip()}"
+            )
 
         formatted_context = "\n\n".join(excerpts)
 
@@ -304,7 +313,7 @@ class HealthSenseRAG:
         raw = completion.choices[0].message.content.strip()
         safe, _ = apply_guardrails(user_query, raw)
 
-        # Hard enforcement: evidence must contain at least one blockquote line
+        # Hard enforcement: must contain at least one blockquote in evidence section
         if safe != STRICT_FALLBACK and ("Guideline Evidence:" in safe) and (">" not in safe):
             safe = STRICT_FALLBACK
 
